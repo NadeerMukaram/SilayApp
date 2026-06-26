@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Silay",
+    "slug": "silay",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/team-silayan.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/team-silayan.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#db4278"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/team-silayan.png",
+        "backgroundColor": "#db4278"
+      },
+      "package": "com.teamsilayan.silay",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ],
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "178bb191-bbd5-4912-97ef-8c9c2229beb7"
+      }
+    }
+  }
+}
