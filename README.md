@@ -1,5 +1,3 @@
-# Breast Exam Checker
-
 A React Native (Expo) Android app that imports clinical Excel sheets and checks the **Breast** column on the **last data row**.
 
 ## How it works
