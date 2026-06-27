@@ -2,7 +2,8 @@ import * as XLSX from 'xlsx';
 
 export type PatientRecord = {
   rowIndex: number;
-  date: string;
+  date: string;           // referral date (optional)
+  screeningDate: string;  // screening date (required)
   patientName: string;
   breastValue: string;
   isUr: boolean;
@@ -19,7 +20,8 @@ export type BreastCheckResult = PatientRecord & { sheetName: string };
 
 const BREAST_KEYS = ['breast'];
 const NAME_KEYS = ['name', 'patient name', 'patient'];
-const DATE_KEYS = ['date'];
+const DATE_KEYS = ['date', 'referral date'];
+const SCREENING_KEYS = ['screening date', 'screening'];
 const ID_KEYS = ['id number', 'id no', 'id no.', 'id', 'hospital id'];
 
 function normalizeHeader(value: unknown): string {
@@ -172,6 +174,7 @@ function buildPatientRecord(
   breastCol: number,
   nameCol: number,
   dateCol: number,
+  screeningCol: number,
 ): PatientRecord {
   const breastValue = normalizeCell(getRowCell(row, breastCol));
   const isUr = breastValue.toUpperCase() === 'UR';
@@ -180,6 +183,7 @@ function buildPatientRecord(
       ? normalizeCell(getRowCell(row, nameCol)) || `Row ${rowIndex + 1}`
       : `Row ${rowIndex + 1}`;
   const date = dateCol >= 0 ? formatDateValue(getRowCell(row, dateCol)) : '(no date)';
+  const screeningDate = screeningCol >= 0 ? formatDateValue(getRowCell(row, screeningCol)) : date;
 
   const fields: Record<string, string> = {};
   headers.forEach((header, colIndex) => {
@@ -196,6 +200,7 @@ function buildPatientRecord(
   return {
     rowIndex: rowIndex + 1,
     date,
+    screeningDate,
     patientName,
     breastValue: breastValue || '(empty)',
     isUr,
@@ -229,6 +234,7 @@ export function parseExcelBase64(base64: string): ExcelParseResult {
 
   const nameCol = findColumnIndex(headers, NAME_KEYS);
   const dateCol = findColumnIndex(headers, DATE_KEYS);
+  const screeningCol = findColumnIndex(headers, SCREENING_KEYS);
   const idCol = findColumnIndex(headers, ID_KEYS);
 
   const patients: PatientRecord[] = [];
@@ -240,7 +246,7 @@ export function parseExcelBase64(base64: string): ExcelParseResult {
     }
 
     patients.push(
-      buildPatientRecord(row, rowIndex, headers, headerRow, breastCol, nameCol, dateCol),
+      buildPatientRecord(row, rowIndex, headers, headerRow, breastCol, nameCol, dateCol, screeningCol),
     );
   }
 

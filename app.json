@@ -4,17 +4,17 @@
     "slug": "silay",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/team-silayan.png",
+    "icon": "./assets/team-silayan-icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/team-silayan.png",
+      "image": "./assets/team-silayan-splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/team-silayan.png",
+        "foregroundImage": "./assets/team-silayan-icon.png",
         "backgroundColor": "#FFFFFF"
       },
       "package": "com.teamsilayan.silay",
