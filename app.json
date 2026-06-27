@@ -10,14 +10,15 @@
     "splash": {
       "image": "./assets/team-silayan.png",
       "resizeMode": "contain",
-      "backgroundColor": "#db4278"
+      "backgroundColor": "#FFFFFF"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/team-silayan.png",
-        "backgroundColor": "#db4278"
+        "backgroundColor": "#FFFFFF"
       },
       "package": "com.teamsilayan.silay",
+      "kotlinVersion": "1.9.25",
       "permissions": [
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
@@ -30,7 +31,8 @@
           "iCloudContainerEnvironment": "Production"
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {

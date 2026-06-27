@@ -1,15 +1,17 @@
 {
-  "name": "bmi-excel-app",
+  "name": "silay-app",
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "sample": "node scripts/create-sample-excel.js"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-native-community/datetimepicker": "8.3.0",
     "expo": "~52.0.0",
     "expo-asset": "~11.0.5",
     "expo-document-picker": "~13.0.0",
@@ -18,7 +20,7 @@
     "expo-sharing": "~13.0.0",
     "expo-status-bar": "~2.0.0",
     "react": "18.3.1",
-    "react-native": "0.76.5",
+    "react-native": "0.76.9",
     "react-native-safe-area-context": "4.12.0",
     "xlsx": "^0.18.5"
   },
