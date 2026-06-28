@@ -31,8 +31,7 @@
           "iCloudContainerEnvironment": "Production"
         }
       ],
-      "expo-asset",
-      "@react-native-community/datetimepicker"
+      "expo-asset"
     ],
     "extra": {
       "eas": {

@@ -24,8 +24,7 @@ import * as Sharing from 'expo-sharing';
 import * as XLSX from 'xlsx';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
-import * as DocumentPicker from 'expo-document-picker';
-import { parseExcelBase64, ExcelParseResult, PatientRecord } from './src/utils/excel';
+import { ExcelParseResult, PatientRecord } from './src/utils/excel';
 
 const teamSilayanLogo = require('./assets/team-silayan.png');
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -105,24 +104,13 @@ export default function App() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [staffsVisible, setStaffsVisible] = useState(false);
   const [statusBoardVisible, setStatusBoardVisible] = useState(false);
-  const [importVisible, setImportVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchScreeningDate, setSearchScreeningDate] = useState('');
-  const [searchReferralDate, setSearchReferralDate] = useState('');
   const [carouselVisible, setCarouselVisible] = useState(true);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [fullscreenVisible, setFullscreenVisible] = useState(false);
   const [fullscreenImageIndex, setFullscreenImageIndex] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const fullscreenFlatListRef = useRef<FlatList>(null);
-  const [patientListPage, setPatientListPage] = useState(0);
-  const PATIENTS_PER_PAGE = 20;
-  const [patientDetailVisible, setPatientDetailVisible] = useState(false);
-  const [detailPatientName, setDetailPatientName] = useState<string | null>(null);
-  const [detailPatientRecords, setDetailPatientRecords] = useState<PatientRecord[]>([]);
-  const [statusBoardPatientName, setStatusBoardPatientName] = useState<string | null>(null);
-  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
 
   // Load saved data on mount
   useEffect(() => {
@@ -245,38 +233,6 @@ export default function App() {
     return sorted;
   }, [patientGroups, sortMode, sortAsc]);
 
-  const filteredPatientGroups = useMemo(() => {
-    let filtered = sortedPatientGroups;
-    
-    // Filter by name
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      filtered = filtered.filter((g) => g.name.toLowerCase().includes(q));
-    }
-    
-    // Filter by screening date
-    if (searchScreeningDate.trim()) {
-      const q = searchScreeningDate.trim();
-      filtered = filtered.filter((g) => {
-        const latest = g.records[g.records.length - 1];
-        const sd = latest.screeningDate || '';
-        return sd.toLowerCase().includes(q.toLowerCase());
-      });
-    }
-    
-    // Filter by referral date
-    if (searchReferralDate.trim()) {
-      const q = searchReferralDate.trim();
-      filtered = filtered.filter((g) => {
-        const latest = g.records[g.records.length - 1];
-        const rd = latest.date || '';
-        return rd.toLowerCase().includes(q.toLowerCase());
-      });
-    }
-    
-    return filtered;
-  }, [sortedPatientGroups, searchQuery, searchScreeningDate, searchReferralDate]);
-
   const selectedRecords = useMemo(() => {
     if (!selectedPatientName || !loadedFile) return [];
     return loadedFile.result.patients.filter(
@@ -345,23 +301,8 @@ export default function App() {
         result: { ...loadedFile.result, patients: updatedPatients },
       });
       setEditRecordPatient(null);
-      
-      // Force detail modal refresh
-      setDetailRefreshKey(prev => prev + 1);
-      
-      // Refresh patient detail if it's open
-      if (patientDetailVisible && detailPatientName) {
-        const refreshedRecords = updatedPatients.filter(
-          (p) => p.patientName.toLowerCase().trim() === detailPatientName.toLowerCase().trim()
-        ).sort((a, b) => {
-          const dateA = new Date(a.date).getTime() || 0;
-          const dateB = new Date(b.date).getTime() || 0;
-          return dateA - dateB;
-        });
-        setDetailPatientRecords(refreshedRecords);
-      }
     },
-    [loadedFile, patientDetailVisible, detailPatientName],
+    [loadedFile],
   );
 
   const exportSingleRecord = useCallback(async (record: PatientRecord) => {
@@ -412,48 +353,6 @@ export default function App() {
     );
   }, []);
 
-  const importExcel = useCallback(async (base64: string, fileName: string) => {
-    try {
-      const checkResult = parseExcelBase64(base64);
-      // Inject admit numbers for patients that don't have one
-      const admitNumberKey = Object.keys(checkResult.patients[0]?.fields ?? {}).find(
-        (k) => k.toLowerCase().includes('admit number')
-      );
-      if (!admitNumberKey) {
-        checkResult.patients.forEach((patient) => {
-          patient.fields['Admit Number'] = String(Math.floor(100000000 + Math.random() * 900000000));
-        });
-      }
-      // Ensure screeningDate is set
-      checkResult.patients.forEach((patient) => {
-        if (!patient.screeningDate) {
-          const sdKey = Object.keys(patient.fields).find(k => k.toLowerCase().includes('screening date'));
-          patient.screeningDate = sdKey ? patient.fields[sdKey] : patient.date || '(no date)';
-        }
-      });
-      if (loadedFile) {
-        // Merge with existing data
-        const existingRows = loadedFile.result.patients.map(p => p.rowIndex);
-        const maxRow = Math.max(...existingRows, 0);
-        const newPatients = checkResult.patients.map((p, i) => ({ ...p, rowIndex: maxRow + i + 1 }));
-        setLoadedFile({
-          ...loadedFile,
-          result: {
-            ...loadedFile.result,
-            patients: [...loadedFile.result.patients, ...newPatients],
-          },
-        });
-        Alert.alert('Imported', `Added ${newPatients.length} records from ${fileName}.`);
-      } else {
-        setLoadedFile({ name: fileName, result: checkResult });
-        Alert.alert('Imported', `Loaded ${checkResult.patients.length} records from ${fileName}.`);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Import failed.';
-      Alert.alert('Import failed', msg);
-    }
-  }, [loadedFile]);
-
   const exportExcel = useCallback(async () => {
     if (!loadedFile?.result.patients.length) {
       Alert.alert('Nothing to export', 'Create some patient records first.');
@@ -462,12 +361,9 @@ export default function App() {
     try {
       const patients = loadedFile.result.patients;
       // Get all unique field keys
-      const allKeysSet = new Set<string>();
-      patients.forEach((p) => Object.keys(p.fields).forEach((k) => allKeysSet.add(k)));
-      // Put Screening Date and Referral Date first, then the rest
-      const priorityKeys = ['Screening Date', 'Referral Date'];
-      const otherKeys = Array.from(allKeysSet).filter(k => !priorityKeys.includes(k));
-      const headers = [...priorityKeys.filter(k => allKeysSet.has(k)), ...otherKeys];
+      const allKeys = new Set<string>();
+      patients.forEach((p) => Object.keys(p.fields).forEach((k) => allKeys.add(k)));
+      const headers = Array.from(allKeys);
 
       // Build rows - one per patient record
       const rows: string[][] = [];
@@ -539,14 +435,6 @@ export default function App() {
       ]}
     />
   );
-
-  const todayString = () => {
-    const today = new Date();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const yyyy = today.getFullYear();
-    return `${mm}/${dd}/${yyyy}`;
-  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -623,103 +511,6 @@ export default function App() {
               </Text>
             </View>
 
-            {/* Search Section */}
-            <View style={styles.searchSection}>
-              <View style={styles.searchRow}>
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Search patient name..."
-                  placeholderTextColor="#9ca3af"
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                />
-                {searchQuery.length > 0 && (
-                  <Pressable style={styles.searchClearBtn} onPress={() => setSearchQuery('')}>
-                    <Text style={styles.searchClearBtnText}>✕</Text>
-                  </Pressable>
-                )}
-              </View>
-              
-              <View style={styles.dateSearchRow}>
-                <View style={styles.dateSearchGroup}>
-                  <Text style={styles.dateSearchLabel}>Screening:</Text>
-                  <TextInput
-                    style={styles.dateSearchInput}
-                    placeholder="MM/DD/YYYY"
-                    placeholderTextColor="#9ca3af"
-                    value={searchScreeningDate}
-                    onChangeText={setSearchScreeningDate}
-                  />
-                  {searchScreeningDate.length > 0 && (
-                    <Pressable style={styles.searchClearBtnSmall} onPress={() => setSearchScreeningDate('')}>
-                      <Text style={styles.searchClearBtnText}>✕</Text>
-                    </Pressable>
-                  )}
-                </View>
-                
-                <View style={styles.dateSearchGroup}>
-                  <Text style={styles.dateSearchLabel}>Referral:</Text>
-                  <TextInput
-                    style={styles.dateSearchInput}
-                    placeholder="MM/DD/YYYY"
-                    placeholderTextColor="#9ca3af"
-                    value={searchReferralDate}
-                    onChangeText={setSearchReferralDate}
-                  />
-                  {searchReferralDate.length > 0 && (
-                    <Pressable style={styles.searchClearBtnSmall} onPress={() => setSearchReferralDate('')}>
-                      <Text style={styles.searchClearBtnText}>✕</Text>
-                    </Pressable>
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.quickDateFilterRow}>
-                <Pressable 
-                  style={[styles.quickDateFilterBtn, !searchScreeningDate && !searchReferralDate && styles.quickDateFilterBtnActive]}
-                  onPress={() => {
-                    setSearchScreeningDate('');
-                    setSearchReferralDate('');
-                  }}
-                >
-                  <Text style={[styles.quickDateFilterBtnText, !searchScreeningDate && !searchReferralDate && styles.quickDateFilterBtnTextActive]}>All</Text>
-                </Pressable>
-                <Pressable 
-                  style={[styles.quickDateFilterBtn, searchScreeningDate && styles.quickDateFilterBtnActive]}
-                  onPress={() => {
-                    setSearchScreeningDate(todayString());
-                    setSearchReferralDate('');
-                  }}
-                >
-                  <Text style={[styles.quickDateFilterBtnText, searchScreeningDate && styles.quickDateFilterBtnTextActive]}>Today's Screening</Text>
-                </Pressable>
-                <Pressable 
-                  style={[styles.quickDateFilterBtn, searchReferralDate && styles.quickDateFilterBtnActive]}
-                  onPress={() => {
-                    setSearchReferralDate(todayString());
-                    setSearchScreeningDate('');
-                  }}
-                >
-                  <Text style={[styles.quickDateFilterBtnText, searchReferralDate && styles.quickDateFilterBtnTextActive]}>Today's Referral</Text>
-                </Pressable>
-              </View>
-              
-              {(searchScreeningDate || searchReferralDate) && (
-                <View style={styles.searchFilterChip}>
-                  <Text style={styles.searchFilterChipText}>
-                    Filtering by date{searchScreeningDate ? ` · Screening: ${searchScreeningDate}` : ''}
-                    {searchReferralDate ? ` · Referral: ${searchReferralDate}` : ''}
-                  </Text>
-                  <Pressable onPress={() => {
-                    setSearchScreeningDate('');
-                    setSearchReferralDate('');
-                  }}>
-                    <Text style={styles.searchFilterChipClear}>✕ Clear</Text>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-
             <View style={styles.listCard}>
               <View style={styles.listHeader}>
                 <Pressable style={[styles.listHeaderBtn, styles.listNameCol]} onPress={() => {
@@ -768,62 +559,57 @@ export default function App() {
                 </Pressable>
               </View>
 
-              <View style={styles.searchResultsInfo}>
-                <Text style={styles.searchResultsInfoText}>
-                  Showing {filteredPatientGroups.length} of {patientGroups.length} patients
-                  {searchScreeningDate && ` (Screening: ${searchScreeningDate})`}
-                  {searchReferralDate && ` (Referral: ${searchReferralDate})`}
-                </Text>
-              </View>
-
-              {(() => {
-                const start = patientListPage * PATIENTS_PER_PAGE;
-                const end = start + PATIENTS_PER_PAGE;
-                const pageGroups = filteredPatientGroups.slice(start, end);
-                return pageGroups.map((group) => (
-                  <PatientListRow
-                    key={group.name.toLowerCase().trim()}
-                    group={group}
-                    selected={false}
-                    onPress={() => {
-                      const recs = loadedFile?.result.patients.filter(
-                        (p) => p.patientName.toLowerCase().trim() === group.name.toLowerCase().trim()
-                      ).sort((a, b) => {
-                        const dateA = new Date(a.date).getTime() || 0;
-                        const dateB = new Date(b.date).getTime() || 0;
-                        return dateA - dateB;
-                      }) || [];
-                      setDetailPatientName(group.name);
-                      setDetailPatientRecords(recs);
-                      setPatientDetailVisible(true);
-                    }}
-                  />
-                ));
-              })()}
-              {filteredPatientGroups.length > PATIENTS_PER_PAGE && (
-                <View style={styles.paginationRow}>
-                  <Pressable
-                    style={[styles.paginationBtn, patientListPage === 0 && styles.paginationBtnDisabled]}
-                    onPress={() => setPatientListPage((p) => Math.max(0, p - 1))}
-                    disabled={patientListPage === 0}
-                  >
-                    <Text style={[styles.paginationBtnText, patientListPage === 0 && styles.paginationBtnTextDisabled]}>← Prev</Text>
-                  </Pressable>
-                  <Text style={styles.paginationText}>
-                    Page {patientListPage + 1} of {Math.ceil(filteredPatientGroups.length / PATIENTS_PER_PAGE)}
-                  </Text>
-                  <Pressable
-                    style={[styles.paginationBtn, (patientListPage + 1) * PATIENTS_PER_PAGE >= filteredPatientGroups.length && styles.paginationBtnDisabled]}
-                    onPress={() => setPatientListPage((p) => p + 1)}
-                    disabled={(patientListPage + 1) * PATIENTS_PER_PAGE >= filteredPatientGroups.length}
-                  >
-                    <Text style={[styles.paginationBtnText, (patientListPage + 1) * PATIENTS_PER_PAGE >= filteredPatientGroups.length && styles.paginationBtnTextDisabled]}>Next →</Text>
-                  </Pressable>
-                </View>
-              )}
+              {sortedPatientGroups.map((group) => (
+                <PatientListRow
+                  key={group.name.toLowerCase().trim()}
+                  group={group}
+                  selected={selectedPatientName?.toLowerCase().trim() === group.name.toLowerCase().trim()}
+                  onPress={() => {
+                    setSelectedPatientName((current) =>
+                      current?.toLowerCase().trim() === group.name.toLowerCase().trim() ? null : group.name,
+                    );
+                  }}
+                />
+              ))}
             </View>
 
-            {/* Patient detail now opens in a modal */}
+            {selectedPatientName && selectedRecords.length > 0 ? (
+              <PatientDetail
+                patientName={selectedPatientName}
+                records={selectedRecords}
+                onViewRecord={(p) => setViewRecordPatient(p)}
+                onEditRecord={(p) => setEditRecordPatient(p)}
+                onAddNewRecord={() => setAddRecordForPatient(selectedPatientName)}
+                onDeleteRecord={(p) => {
+                  Alert.alert(
+                    'Delete Record',
+                    `Are you sure you want to delete this record for ${p.patientName}?\n\nAdmit No: ${p.fields['Admit Number'] || 'N/A'}`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { 
+                        text: 'Delete', 
+                        style: 'destructive',
+                        onPress: () => {
+                          if (!loadedFile) return;
+                          const updatedPatients = loadedFile.result.patients.filter(
+                            (patient) => patient.rowIndex !== p.rowIndex
+                          );
+                          setLoadedFile({
+                            ...loadedFile,
+                            result: { ...loadedFile.result, patients: updatedPatients },
+                          });
+                          if (updatedPatients.filter(
+                            (pt) => pt.patientName.toLowerCase().trim() === p.patientName.toLowerCase().trim()
+                          ).length === 0) {
+                            setSelectedPatientName(null);
+                          }
+                        }
+                      },
+                    ]
+                  );
+                }}
+              />
+            ) : null}
           </ScrollView>
         ) : (
           <View style={styles.placeholderCard}>
@@ -954,42 +740,15 @@ export default function App() {
           setSidebarVisible(false);
           setStatusBoardVisible(true);
         }}
-        onImport={() => {
-          setSidebarVisible(false);
-          setImportVisible(true);
-        }}
         onClearData={clearAllData}
         hasData={!!loadedFile}
-      />
-      <ImportExcelModal
-        visible={importVisible}
-        onClose={() => setImportVisible(false)}
-        onImport={importExcel}
       />
       <AboutModal visible={aboutVisible} onClose={() => setAboutVisible(false)} />
       <StaffsModal visible={staffsVisible} onClose={() => setStaffsVisible(false)} />
       <StatusBoardModal
         visible={statusBoardVisible}
-        onClose={() => {
-          setStatusBoardVisible(false);
-          setStatusBoardPatientName(null);
-        }}
+        onClose={() => setStatusBoardVisible(false)}
         patientGroups={patientGroups}
-        onPatientPress={(patientName) => {
-          setStatusBoardPatientName(patientName);
-          
-          const records = loadedFile?.result.patients.filter(
-            (p) => p.patientName.toLowerCase().trim() === patientName.toLowerCase().trim()
-          ).sort((a, b) => {
-            const dateA = new Date(a.date).getTime() || 0;
-            const dateB = new Date(b.date).getTime() || 0;
-            return dateA - dateB;
-          }) || [];
-          
-          setDetailPatientName(patientName);
-          setDetailPatientRecords(records);
-          setPatientDetailVisible(true);
-        }}
       />
       <AddPatientModal
         visible={addPatientVisible}
@@ -1025,120 +784,9 @@ export default function App() {
           existingPatients={loadedFile?.result.patients}
         />
       )}
-      {patientDetailVisible && detailPatientName && (
-        <PatientDetailModal
-          key={detailRefreshKey}
-          visible={patientDetailVisible}
-          patientName={detailPatientName}
-          records={detailPatientRecords}
-          onClose={() => {
-            setPatientDetailVisible(false);
-            setDetailPatientName(null);
-            setDetailPatientRecords([]);
-            
-            if (statusBoardPatientName) {
-              setStatusBoardVisible(true);
-              setStatusBoardPatientName(null);
-            }
-          }}
-          onViewRecord={(p) => setViewRecordPatient(p)}
-          onEditRecord={(p) => setEditRecordPatient(p)}
-          onAddNewRecord={() => {
-            setPatientDetailVisible(false);
-            setAddRecordForPatient(detailPatientName);
-          }}
-          onDeleteRecord={(p) => {
-            Alert.alert(
-              'Delete Record',
-              `Are you sure you want to delete this record for ${p.patientName}?\n\nAdmit No: ${p.fields['Admit Number'] || 'N/A'}`,
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => {
-                    if (!loadedFile) return;
-                    const updatedPatients = loadedFile.result.patients.filter(
-                      (patient) => patient.rowIndex !== p.rowIndex
-                    );
-                    setLoadedFile({
-                      ...loadedFile,
-                      result: { ...loadedFile.result, patients: updatedPatients },
-                    });
-                    
-                    const refreshedRecords = updatedPatients.filter(
-                      (pt) => pt.patientName.toLowerCase().trim() === p.patientName.toLowerCase().trim()
-                    ).sort((a, b) => {
-                      const dateA = new Date(a.date).getTime() || 0;
-                      const dateB = new Date(b.date).getTime() || 0;
-                      return dateA - dateB;
-                    });
-                    setDetailPatientRecords(refreshedRecords);
-                    
-                    if (refreshedRecords.length === 0) {
-                      setPatientDetailVisible(false);
-                      setDetailPatientName(null);
-                      setDetailPatientRecords([]);
-                      
-                      if (statusBoardPatientName) {
-                        setStatusBoardVisible(true);
-                        setStatusBoardPatientName(null);
-                      }
-                    }
-                  }
-                },
-              ]
-            );
-          }}
-        />
-      )}
     </SafeAreaView>
   );
 }
-
-function PatientDetailModal({
-  visible,
-  patientName,
-  records,
-  onClose,
-  onViewRecord,
-  onEditRecord,
-  onAddNewRecord,
-  onDeleteRecord,
-}: {
-  visible: boolean;
-  patientName: string;
-  records: PatientRecord[];
-  onClose: () => void;
-  onViewRecord: (p: PatientRecord) => void;
-  onEditRecord: (p: PatientRecord) => void;
-  onAddNewRecord: () => void;
-  onDeleteRecord: (p: PatientRecord) => void;
-}) {
-  return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalContainer}>
-        <View style={styles.modalHeaderRow}>
-          <Text style={styles.modalHeaderTitle}>Patient Details</Text>
-          <Pressable style={styles.modalCancelButton} onPress={onClose}>
-            <Text style={styles.modalCancelButtonText}>Close</Text>
-          </Pressable>
-        </View>
-        <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
-          <PatientDetail
-            patientName={patientName}
-            records={records}
-            onViewRecord={onViewRecord}
-            onEditRecord={onEditRecord}
-            onAddNewRecord={onAddNewRecord}
-            onDeleteRecord={onDeleteRecord}
-          />
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
 
 function PatientListRow({
   group,
@@ -1260,12 +908,66 @@ function PatientDetail({
         </Pressable>
       </View>
 
-      <AdmissionHistoryCard
-        records={records}
-        onViewRecord={onViewRecord}
-        onEditRecord={onEditRecord}
-        onDeleteRecord={onDeleteRecord}
-      />
+      <View style={styles.admissionHistoryCard}>
+        <Text style={styles.admissionHistoryTitle}>Admission History</Text>
+        {records.map((record, idx) => {
+          const categorized = categorizeFieldsForDisplay(record.fields);
+          const recordIsUr = record.isUr;
+          const hasReferral = categorized.referralDates.length > 0 && 
+                             categorized.referralDates[0] !== '(no date)' && 
+                             categorized.referralDates[0] !== '(empty)';
+
+          return (
+            <View key={record.rowIndex} style={styles.admissionHistoryRow}>
+              <Text style={styles.admissionHistoryNumber}>#{idx + 1}</Text>
+              <View style={styles.admissionHistoryInfo}>
+                <Text style={styles.admissionHistoryAdmitNo}>Admit No: {categorized.admitNumber || 'N/A'}</Text>
+                {categorized.screeningDates.length > 0 && (
+                  <Text style={styles.admissionHistoryDate}>
+                    Screening Date{categorized.screeningDates.length > 1 ? 's' : ''}: {categorized.screeningDates.join(', ')}
+                  </Text>
+                )}
+                {/* Only show referral dates if NOT UR */}
+                {!recordIsUr && categorized.referralDates.length > 0 && (
+                  <Text style={styles.admissionHistoryDate}>
+                    Referral Date{categorized.referralDates.length > 1 ? 's' : ''}: {categorized.referralDates.join(', ')}
+                  </Text>
+                )}
+                {/* Show message if UR */}
+                {recordIsUr && (
+                  <Text style={[styles.admissionHistoryDate, { color: '#065f46', fontStyle: 'italic' }]}>
+                    (UR patient - no referral date needed)
+                  </Text>
+                )}
+                <Text style={styles.admissionHistoryStatus}>
+                  Status: {record.isUr ? 'UR' : record.breastValue}
+                </Text>
+                <View style={styles.admissionActionRow}>
+                  <Pressable
+                    style={styles.viewRecordBtn}
+                    onPress={() => onViewRecord(record)}
+                  >
+                    <Text style={styles.viewRecordBtnText}>View</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.editRecordBtn}
+                    onPress={() => onEditRecord(record)}
+                  >
+                    <Text style={styles.editRecordBtnText}>Edit</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.deleteRecordBtn}
+                    onPress={() => onDeleteRecord(record)}
+                  >
+                    <Text style={styles.deleteRecordBtnText}>Delete</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
       <View style={styles.detailCard}>
         <Text style={styles.detailCardTitle}>Latest Record Details</Text>
         
@@ -1299,147 +1001,6 @@ function PatientDetail({
           </>
         )}
       </View>
-    </View>
-  );
-}
-
-function AdmissionHistoryCard({
-  records,
-  onViewRecord,
-  onEditRecord,
-  onDeleteRecord,
-}: {
-  records: PatientRecord[];
-  onViewRecord: (p: PatientRecord) => void;
-  onEditRecord: (p: PatientRecord) => void;
-  onDeleteRecord: (p: PatientRecord) => void;
-}) {
-  const [historySortAsc, setHistorySortAsc] = useState(true);
-  const [historySearch, setHistorySearch] = useState('');
-  const [historyPage, setHistoryPage] = useState(0);
-  const HISTORY_PER_PAGE = 10;
-
-  const sortedRecords = useMemo(() => {
-    const arr = [...records];
-    arr.sort((a, b) => {
-      const parse = (d: string) => {
-        const parts = d?.split('/');
-        if (parts?.length === 3) return new Date(Number(parts[2]), Number(parts[0]) - 1, Number(parts[1])).getTime();
-        return new Date(d || '').getTime() || 0;
-      };
-      const da = parse(a.screeningDate || a.date || '');
-      const db = parse(b.screeningDate || b.date || '');
-      return historySortAsc ? da - db : db - da;
-    });
-    return arr;
-  }, [records, historySortAsc]);
-
-  const filteredRecords = useMemo(() => {
-    if (!historySearch.trim()) return sortedRecords;
-    const q = historySearch.toLowerCase().trim();
-    return sortedRecords.filter((r) => {
-      const sd = (r.screeningDate || '').toLowerCase();
-      const rd = (r.date || '').toLowerCase();
-      const admitNo = (r.fields['Admit Number'] || '').toLowerCase();
-      return sd.includes(q) || rd.includes(q) || admitNo.includes(q);
-    });
-  }, [sortedRecords, historySearch]);
-
-  return (
-    <View style={styles.admissionHistoryCard}>
-      <View style={styles.admissionHistoryCardHeader}>
-        <Text style={styles.admissionHistoryTitle}>Admission History</Text>
-        <Pressable
-          style={styles.historySortBtn}
-          onPress={() => setHistorySortAsc(!historySortAsc)}
-        >
-          <Text style={styles.historySortBtnText}>{historySortAsc ? 'Oldest First ↑' : 'Newest First ↓'}</Text>
-        </Pressable>
-      </View>
-      <View style={styles.historySearchRow}>
-        <TextInput
-          style={styles.historySearchInput}
-          placeholder="Search by date or admit no..."
-          placeholderTextColor="#9ca3af"
-          value={historySearch}
-          onChangeText={setHistorySearch}
-        />
-        {historySearch.length > 0 && (
-          <Pressable style={styles.searchClearBtn} onPress={() => setHistorySearch('')}>
-            <Text style={styles.searchClearBtnText}>✕</Text>
-          </Pressable>
-        )}
-      </View>
-      {(() => {
-        const start = historyPage * HISTORY_PER_PAGE;
-        const end = start + HISTORY_PER_PAGE;
-        const pageRecords = filteredRecords.slice(start, end);
-        return pageRecords.map((record, idx) => {
-          const categorized = categorizeFieldsForDisplay(record.fields);
-          const recordIsUr = record.isUr;
-          return (
-            <View key={record.rowIndex} style={styles.admissionHistoryRow}>
-              <Text style={styles.admissionHistoryNumber}>#{start + idx + 1}</Text>
-              <View style={styles.admissionHistoryInfo}>
-                <Text style={styles.admissionHistoryAdmitNo}>Admit No: {categorized.admitNumber || 'N/A'}</Text>
-                {categorized.screeningDates.length > 0 && (
-                  <Text style={styles.admissionHistoryDate}>
-                    Screening: {categorized.screeningDates.join(', ')}
-                  </Text>
-                )}
-                {!recordIsUr && categorized.referralDates.length > 0 && (
-                  <Text style={styles.admissionHistoryDate}>
-                    Referral: {categorized.referralDates.join(', ')}
-                  </Text>
-                )}
-                {recordIsUr && (
-                  <Text style={[styles.admissionHistoryDate, { color: '#065f46', fontStyle: 'italic' }]}>
-                    (UR - no referral needed)
-                  </Text>
-                )}
-                <Text style={styles.admissionHistoryStatus}>
-                  Breast Status: {record.isUr ? 'UR' : record.breastValue}
-                </Text>
-                <View style={styles.admissionActionRow}>
-                  <Pressable style={styles.viewRecordBtn} onPress={() => onViewRecord(record)}>
-                    <Text style={styles.viewRecordBtnText}>View</Text>
-                  </Pressable>
-                  <Pressable style={styles.editRecordBtn} onPress={() => onEditRecord(record)}>
-                    <Text style={styles.editRecordBtnText}>Edit</Text>
-                  </Pressable>
-                  <Pressable style={styles.deleteRecordBtn} onPress={() => onDeleteRecord(record)}>
-                    <Text style={styles.deleteRecordBtnText}>Delete</Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          );
-        });
-      })()}
-      {filteredRecords.length === 0 && (
-        <Text style={{ color: '#9ca3af', fontSize: 14, fontStyle: 'italic', padding: 8 }}>No records match your search.</Text>
-      )}
-      {filteredRecords.length > HISTORY_PER_PAGE && (
-        <View style={styles.paginationRow}>
-          <Pressable
-            style={[styles.paginationBtn, historyPage === 0 && styles.paginationBtnDisabled]}
-            onPress={() => setHistoryPage((p) => Math.max(0, p - 1))}
-            disabled={historyPage === 0}
-          >
-            <Text style={[styles.paginationBtnText, historyPage === 0 && styles.paginationBtnTextDisabled]}>← Prev</Text>
-          </Pressable>
-          <Text style={styles.paginationText}>
-            Page {historyPage + 1} of {Math.ceil(filteredRecords.length / HISTORY_PER_PAGE)}
-          </Text>
-          <Pressable
-            style={[styles.paginationBtn, (historyPage + 1) * HISTORY_PER_PAGE >= filteredRecords.length && styles.paginationBtnDisabled]}
-            onPress={() => setHistoryPage((p) => p + 1)}
-            disabled={(historyPage + 1) * HISTORY_PER_PAGE >= filteredRecords.length}
-          >
-            <Text style={[styles.paginationBtnText, (historyPage + 1) * HISTORY_PER_PAGE >= filteredRecords.length && styles.paginationBtnTextDisabled]}>Next →</Text>
-          </Pressable>
-        </View>
-      )}
     </View>
   );
 }
@@ -1535,7 +1096,7 @@ function ViewRecordModal({
               {isUr ? '✓' : '⚠'}
             </Text>
             <Text style={[styles.statusTitle, { color: isUr ? '#065f46' : '#92400e' }]}>
-              {isUr ? 'Breast Status: UR' : 'Breast Status: Warning'}
+              {isUr ? 'Status: UR' : 'Status: Warning'}
             </Text>
             <Text style={[styles.statusMessage, { color: isUr ? '#0f5132' : '#664d03' }]}>
               {isUr ? 'Unremarkable' : patient.breastValue}
@@ -3189,7 +2750,6 @@ function SidebarModal({
   onAbout,
   onStaffs,
   onStatusBoard,
-  onImport,
   onClearData,
   hasData,
 }: {
@@ -3198,7 +2758,6 @@ function SidebarModal({
   onAbout: () => void;
   onStaffs: () => void;
   onStatusBoard: () => void;
-  onImport: () => void;
   onClearData: () => void;
   hasData: boolean;
 }) {
@@ -3235,13 +2794,6 @@ function SidebarModal({
               <Text style={styles.sidebarItemIconText}>📋</Text>
             </View>
             <Text style={styles.sidebarItemText}>Status Board</Text>
-          </Pressable>
-
-          <Pressable style={styles.sidebarItem} onPress={() => { onClose(); onImport(); }}>
-            <View style={styles.sidebarItemIconContainer}>
-              <Text style={styles.sidebarItemIconText}>📂</Text>
-            </View>
-            <Text style={styles.sidebarItemText}>Import Excel</Text>
           </Pressable>
 
           {hasData && (
@@ -3322,16 +2874,13 @@ function StatusBoardModal({
   visible,
   onClose,
   patientGroups,
-  onPatientPress,
 }: {
   visible: boolean;
   onClose: () => void;
   patientGroups: PatientGroup[];
-  onPatientPress: (patientName: string) => void;
 }) {
   const [sortMode, setSortMode] = useState<'name' | 'status'>('name');
   const [sortAsc, setSortAsc] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
 
   const sortedGroups = useMemo(() => {
     const sorted = [...patientGroups];
@@ -3349,12 +2898,6 @@ function StatusBoardModal({
     return sorted;
   }, [patientGroups, sortMode, sortAsc]);
 
-  const filteredGroups = useMemo(() => {
-    if (!searchQuery.trim()) return sortedGroups;
-    const q = searchQuery.toLowerCase().trim();
-    return sortedGroups.filter((g) => g.name.toLowerCase().includes(q));
-  }, [sortedGroups, searchQuery]);
-
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <SafeAreaView style={styles.modalContainer}>
@@ -3366,21 +2909,6 @@ function StatusBoardModal({
         </View>
 
         <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
-          <View style={styles.searchRow}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search patient name..."
-              placeholderTextColor="#9ca3af"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <Pressable style={styles.searchClearBtn} onPress={() => setSearchQuery('')}>
-                <Text style={styles.searchClearBtnText}>✕</Text>
-              </Pressable>
-            )}
-          </View>
-
           <View style={styles.statusBoardListCard}>
             <View style={styles.statusBoardListHeader}>
               <Pressable style={[styles.statusBoardHeaderBtn, { flex: 1.5 }]} onPress={() => {
@@ -3407,198 +2935,29 @@ function StatusBoardModal({
               </Pressable>
             </View>
 
-            {filteredGroups.length === 0 ? (
-              <View style={styles.statusBoardEmpty}>
-                <Text style={styles.statusBoardEmptyText}>No patients found</Text>
-              </View>
-            ) : (
-              filteredGroups.map((group) => {
-                const latestRecord = group.records[group.records.length - 1];
-                return (
-                  <Pressable 
-                    key={group.name.toLowerCase().trim()} 
-                    style={({ pressed }) => [
-                      styles.statusBoardRow,
-                      pressed && styles.statusBoardRowPressed
-                    ]}
-                    onPress={() => {
-                      onPatientPress(group.name);
-                    }}
-                  >
-                    <Text style={[styles.statusBoardCell, { flex: 1.5 }]} numberOfLines={1}>
-                      {group.name}
-                    </Text>
-                    <View style={{ flex: 1, alignItems: 'flex-start' }}>
-                      {latestRecord.isUr ? (
-                        <View style={styles.statusBoardBadgeOk}>
-                          <Text style={styles.statusBoardBadgeTextOk}>✓ UR</Text>
-                        </View>
-                      ) : (
-                        <View style={styles.statusBoardBadgeWarn}>
-                          <Text style={styles.statusBoardBadgeTextWarn}>⚠ {latestRecord.breastValue || 'Warning'}</Text>
-                        </View>
-                      )}
-                    </View>
-                  </Pressable>
-                );
-              })
-            )}
+            {sortedGroups.map((group) => {
+              const latestRecord = group.records[group.records.length - 1];
+              return (
+                <View key={group.name.toLowerCase().trim()} style={styles.statusBoardRow}>
+                  <Text style={[styles.statusBoardCell, { flex: 1.5 }]} numberOfLines={1}>
+                    {group.name}
+                  </Text>
+                  <View style={{ flex: 1, alignItems: 'flex-start' }}>
+                    {latestRecord.isUr ? (
+                      <View style={styles.statusBoardBadgeOk}>
+                        <Text style={styles.statusBoardBadgeTextOk}>✓ UR</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.statusBoardBadgeWarn}>
+                        <Text style={styles.statusBoardBadgeTextWarn}>⚠ {latestRecord.breastValue || 'Warning'}</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
           </View>
         </ScrollView>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
-function ImportExcelModal({
-  visible,
-  onClose,
-  onImport,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onImport: (base64: string, fileName: string) => void;
-}) {
-  const [loading, setLoading] = useState(false);
-
-  const handlePick = async () => {
-    try {
-      setLoading(true);
-      const result = await DocumentPicker.getDocumentAsync({
-        type: [
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'application/vnd.ms-excel',
-        ],
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets?.[0]) {
-        setLoading(false);
-        return;
-      }
-      const asset = result.assets[0];
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      onImport(base64, asset.name);
-      onClose();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to read file.';
-      Alert.alert('Import failed', msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const downloadTemplate = async () => {
-    try {
-      const headers = [
-        'name',
-        'Screening Date',
-        'Referral Date',
-        'Breast',
-        'Admit Number',
-        'ID no. (Hosp)',
-        'age',
-        'address',
-        'civil status',
-        'BP',
-        'Temp',
-        'PR',
-        'RR',
-        'family hx of cancer',
-        'Smoking hx',
-        'Allergies',
-      ];
-      const sampleRow = [
-        'Juan Dela Cruz',
-        '06/28/2026',
-        '07/01/2026',
-        'Warning',
-        '123456789',
-        'HOSP-001',
-        '45',
-        'Manila',
-        'Married',
-        '120/80',
-        '36.5',
-        '72',
-        '18',
-        'No',
-        'No',
-        'None',
-      ];
-      const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Patient Template');
-      const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
-      const uri = `${FileSystem.cacheDirectory}team_silayan_template.xlsx`;
-      await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          dialogTitle: 'Team Silayan - Patient Import Template',
-        });
-      } else {
-        Alert.alert('Template saved', `File saved to cache: ${uri}`);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to create template.';
-      Alert.alert('Template failed', msg);
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalContainer}>
-        <View style={styles.modalHeaderRow}>
-          <Text style={styles.modalHeaderTitle}>Import Excel</Text>
-          <Pressable style={styles.modalCancelButton} onPress={onClose}>
-            <Text style={styles.modalCancelButtonText}>Cancel</Text>
-          </Pressable>
-        </View>
-        <View style={{ flex: 1, padding: 24, gap: 16 }}>
-          <Text style={{ color: '#4b5563', fontSize: 15, lineHeight: 22 }}>
-            Select an Excel file (.xlsx) to import patient records. The file should have columns for{' '}
-            <Text style={{ fontWeight: '700' }}>name</Text>,{' '}
-            <Text style={{ fontWeight: '700' }}>Screening Date</Text>,{' '}
-            <Text style={{ fontWeight: '700' }}>Referral Date</Text>, and{' '}
-            <Text style={{ fontWeight: '700' }}>Breast</Text>.
-          </Text>
-          <Text style={{ color: '#6b7280', fontSize: 13, lineHeight: 20 }}>
-            New records will be merged with your existing data.
-          </Text>
-
-          <View style={{ marginTop: 8, gap: 12 }}>
-            <Pressable
-              style={[styles.saveBtn, loading && { opacity: 0.6 }]}
-              onPress={handlePick}
-              disabled={loading}
-            >
-              <LinearGradient
-                colors={['#db4278', '#b51f55']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={StyleSheet.absoluteFillObject}
-              />
-              <Text style={styles.saveBtnText}>{loading ? 'Loading...' : '📂 Choose Excel File'}</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.secondaryButton, { minHeight: 48 }]}
-              onPress={downloadTemplate}
-            >
-              <Text style={styles.secondaryButtonText}>📥 Download Template</Text>
-            </Pressable>
-          </View>
-
-          <View style={{ marginTop: 16, padding: 16, backgroundColor: '#f9fafb', borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb' }}>
-            <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 8 }}>Template Columns:</Text>
-            <Text style={{ color: '#6b7280', fontSize: 12, lineHeight: 20 }}>
-              name, Screening Date, Referral Date, Breast, Admit Number, ID no. (Hosp), age, address, civil status, BP, Temp, PR, RR, family hx of cancer, Smoking hx, Allergies
-            </Text>
-          </View>
-        </View>
       </SafeAreaView>
     </Modal>
   );
@@ -3730,103 +3089,6 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 14,
   },
-  searchSection: {
-    gap: 8,
-    marginBottom: 12,
-  },
-  dateSearchRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  dateSearchGroup: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#f0e2e9',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    shadowColor: '#db4278',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  dateSearchLabel: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '600',
-    marginRight: 6,
-  },
-  dateSearchInput: {
-    flex: 1,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: '#1f2937',
-    minWidth: 80,
-  },
-  searchClearBtnSmall: {
-    padding: 4,
-  },
-  searchFilterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#fff1f5',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#db4278',
-  },
-  searchFilterChipText: {
-    color: '#db4278',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  searchFilterChipClear: {
-    color: '#db4278',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  quickDateFilterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  quickDateFilterBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  quickDateFilterBtnActive: {
-    backgroundColor: '#db4278',
-    borderColor: '#db4278',
-  },
-  quickDateFilterBtnText: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  quickDateFilterBtnTextActive: {
-    color: '#ffffff',
-  },
-  searchResultsInfo: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#f9fafb',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0e2e9',
-  },
-  searchResultsInfoText: {
-    color: '#6b7280',
-    fontSize: 12,
-  },
   listCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,
@@ -3899,10 +3161,9 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   listStatusCol: {
-    flex: 1.0,
+    flex: 0.5,
     alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 70,
+    minWidth: 30,
   },
   listScreeningCol: {
     flex: 1.2,
@@ -3918,9 +3179,9 @@ const styles = StyleSheet.create({
   },
   statusBadge: {
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    minWidth: 60,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    minWidth: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4973,10 +4234,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f3e8ee',
     gap: 8,
-    backgroundColor: '#ffffff',
-  },
-  statusBoardRowPressed: {
-    backgroundColor: 'rgba(219, 66, 120, 0.05)',
   },
   statusBoardCell: {
     color: '#374151',
@@ -5008,16 +4265,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  statusBoardEmpty: {
-    padding: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statusBoardEmptyText: {
-    color: '#9ca3af',
-    fontSize: 16,
-    fontStyle: 'italic',
-  },
   // Grouped field boxes
   groupBox: {
     backgroundColor: '#ffffff',
@@ -5044,104 +4291,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 3,
     paddingHorizontal: 2,
-  },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#f0e2e9',
-    paddingHorizontal: 12,
-    marginBottom: 8,
-    shadowColor: '#db4278',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#1f2937',
-  },
-  searchClearBtn: {
-    padding: 6,
-  },
-  searchClearBtnText: {
-    color: '#9ca3af',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  admissionHistoryCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  historySortBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    backgroundColor: '#fff1f5',
-    borderWidth: 1,
-    borderColor: '#db4278',
-  },
-  historySortBtnText: {
-    color: '#db4278',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  historySearchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    paddingHorizontal: 10,
-    marginBottom: 10,
-  },
-  historySearchInput: {
-    flex: 1,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: '#1f2937',
-  },
-  paginationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f3e8ee',
-    marginTop: 4,
-  },
-  paginationBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#fff1f5',
-    borderWidth: 1,
-    borderColor: '#db4278',
-  },
-  paginationBtnDisabled: {
-    backgroundColor: '#f3f4f6',
-    borderColor: '#d1d5db',
-  },
-  paginationBtnText: {
-    color: '#db4278',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  paginationBtnTextDisabled: {
-    color: '#9ca3af',
-  },
-  paginationText: {
-    color: '#6b7280',
-    fontSize: 13,
-    fontWeight: '600',
   },
 });
