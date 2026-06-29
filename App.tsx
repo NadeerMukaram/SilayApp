@@ -25,7 +25,16 @@ import * as XLSX from 'xlsx';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 import * as DocumentPicker from 'expo-document-picker';
-import { parseExcelBase64, ExcelParseResult, PatientRecord } from './src/utils/excel';
+import {
+  parseExcelBase64,
+  ExcelParseResult,
+  PatientRecord,
+  groupFieldsByCategory,
+  DISPLAY_ORDER,
+  CATEGORY_LABELS,
+  OB_GYNE_SUB_CATEGORIES,
+  FieldCategory,
+} from './src/utils/excel';
 
 const teamSilayanLogo = require('./assets/team-silayan.png');
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -61,40 +70,82 @@ type DatePickerState = {
 
 const STORAGE_KEY = '@team_silayan_patient_records';
 
-// Helper function to categorize fields for display
+// Helper function to categorize fields for display (new grouped structure)
 function categorizeFieldsForDisplay(fields: Record<string, string>) {
-  const vitals: Record<string, string> = {};
-  const history: Record<string, string> = {};
-  const others: Record<string, string> = {};
   const screeningDates: string[] = [];
   const referralDates: string[] = [];
   let admitNumber = '';
 
   Object.entries(fields).forEach(([key, value]) => {
     const lower = key.toLowerCase().trim();
-    if (lower === 'bp' || lower === 'temp' || lower === 'pr' || lower === 'rr' || 
-        lower === 'temperature' || lower === 'blood pressure' || 
-        lower === 'pulse rate' || lower === 'respiratory rate') {
-      vitals[key] = value;
-    } else if (lower === 'family hx of cancer' || lower === 'smoking hx' || 
-               (lower.includes('family') && lower.includes('cancer')) || 
-               (lower.includes('smoking') && lower.includes('hx'))) {
-      history[key] = value;
-    } else if (lower.includes('screening date')) {
-      screeningDates.push(value);
-    } else if (lower.includes('referral date') || lower === 'date') {
-      referralDates.push(value);
-    } else if (lower.includes('admit number') || lower.includes('admit no')) {
-      admitNumber = value;
-    } else if (!lower.includes('name') && !lower.includes('breast')) {
-      others[key] = value;
-    }
+    if (lower.includes('screening date')) screeningDates.push(value);
+    else if (lower.includes('referral date') || lower === 'date') referralDates.push(value);
+    else if (lower.includes('admit number') || lower.includes('admit no')) admitNumber = value;
   });
 
-  return { vitals, history, others, screeningDates, referralDates, admitNumber };
+  const grouped = groupFieldsByCategory(fields);
+
+  return { grouped, screeningDates, referralDates, admitNumber };
 }
 
-export default function App() {
+// Helper to determine if patient is UR (both breasts UR)
+function isPatientUr(rightBreast: string, leftBreast: string): boolean {
+  return rightBreast?.toUpperCase() === 'UR' && leftBreast?.toUpperCase() === 'UR';
+}
+
+// ALL field keys from the Excel template
+const EXCEL_FIELD_KEYS = [
+  'ID no. (Hosp)',
+  'Age',
+  'Address',
+  'Contact No.',
+  'Civil Status',
+  'No. of Children',
+  'Menarche',
+  'LMP',
+  'AOG',
+  'Menstrual Bleeding Pattern',
+  'No. of pads/day',
+  'Pregnancy History',
+  'Age at first full term pregnancy',
+  'Oral Contraceptives Use',
+  'Duration of usage of oral contraceptives',
+  'History of previous cervical cancer screening',
+  'History of abnormal vaginal discharge',
+  'History of abnormal vaginal bleeding',
+  'Age of first intercourse',
+  'No. of sexual partner',
+  'Spouse/Partner/s',
+  'Family History of Cancer',
+  'Smoking',
+  'Current medication',
+  'Allergies',
+  'Abdominal surgery',
+  'BP',
+  'Temp',
+  'HR',
+  'RR',
+  'Height (cm)',
+  'Weight (kg)',
+  'BMI',
+  'Skin',
+  'HEENT',
+  'Chest and Lungs',
+  'Heart',
+  'Abdomen',
+];
+
+// ─── Helper function to display field labels ──────────────────────────────────
+function getDisplayLabel(key: string): string {
+  const lower = key.toLowerCase().trim();
+  if (lower === 'pregnancy history') return 'GTPAL';
+  // Add override for ID No. (Hosp)
+  if (lower === 'id no. (hosp)' || lower === 'id no. (hosp)') return 'ID No.';
+  // Add other overrides if needed
+  return key.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function App() {
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [selectedPatientName, setSelectedPatientName] = useState<string | null>(null);
   const [aboutVisible, setAboutVisible] = useState(false);
@@ -122,7 +173,6 @@ export default function App() {
   const [detailPatientName, setDetailPatientName] = useState<string | null>(null);
   const [detailPatientRecords, setDetailPatientRecords] = useState<PatientRecord[]>([]);
   const [statusBoardPatientName, setStatusBoardPatientName] = useState<string | null>(null);
-  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
 
   // Load saved data on mount
   useEffect(() => {
@@ -136,6 +186,12 @@ export default function App() {
             parsed.result.patients.forEach((p: any) => {
               if (!p.screeningDate) {
                 p.screeningDate = p.date || '(no date)';
+              }
+              if (!p.rightBreastValue) {
+                p.rightBreastValue = '(empty)';
+              }
+              if (!p.leftBreastValue) {
+                p.leftBreastValue = '(empty)';
               }
             });
             setLoadedFile(parsed);
@@ -165,6 +221,23 @@ export default function App() {
       saveData();
     }
   }, [loadedFile, isLoading]);
+
+  useEffect(() => {
+    if (patientDetailVisible && detailPatientName && loadedFile) {
+      const refreshed = loadedFile.result.patients
+        .filter(
+          (p) =>
+            p.patientName.toLowerCase().trim() ===
+            detailPatientName.toLowerCase().trim(),
+        )
+        .sort((a, b) => {
+          const dateA = new Date(a.date).getTime() || 0;
+          const dateB = new Date(b.date).getTime() || 0;
+          return dateA - dateB;
+        });
+      setDetailPatientRecords(refreshed);
+    }
+  }, [loadedFile, patientDetailVisible, detailPatientName]);
 
   // Auto-advance carousel
   useEffect(() => {
@@ -293,10 +366,12 @@ export default function App() {
       patientName: string;
       date: string;
       screeningDate: string;
+      rightBreastValue: string;
+      leftBreastValue: string;
       breastValue: string;
       fields: Record<string, string>;
     }) => {
-      const isUr = patientData.breastValue.toUpperCase() === 'UR';
+      const isUr = isPatientUr(patientData.rightBreastValue, patientData.leftBreastValue);
       const maxRowIndex = loadedFile?.result.patients.reduce((max, p) => Math.max(max, p.rowIndex), 0) ?? 0;
       const nextRowIndex = maxRowIndex + 1;
 
@@ -306,6 +381,8 @@ export default function App() {
         screeningDate: patientData.screeningDate,
         patientName: patientData.patientName,
         breastValue: patientData.breastValue || '(empty)',
+        rightBreastValue: patientData.rightBreastValue || '(empty)',
+        leftBreastValue: patientData.leftBreastValue || '(empty)',
         isUr,
         fields: patientData.fields,
       };
@@ -345,19 +422,32 @@ export default function App() {
         result: { ...loadedFile.result, patients: updatedPatients },
       });
       setEditRecordPatient(null);
-      
-      // Force detail modal refresh
-      setDetailRefreshKey(prev => prev + 1);
-      
+  
       // Refresh patient detail if it's open
       if (patientDetailVisible && detailPatientName) {
-        const refreshedRecords = updatedPatients.filter(
-          (p) => p.patientName.toLowerCase().trim() === detailPatientName.toLowerCase().trim()
-        ).sort((a, b) => {
-          const dateA = new Date(a.date).getTime() || 0;
-          const dateB = new Date(b.date).getTime() || 0;
-          return dateA - dateB;
-        });
+        // If the name changed, update detailPatientName to the new name
+        const nameChanged =
+          updatedPatient.patientName.toLowerCase().trim() !==
+          detailPatientName.toLowerCase().trim();
+        if (nameChanged) {
+          setDetailPatientName(updatedPatient.patientName);
+        }
+  
+        const searchName = nameChanged
+          ? updatedPatient.patientName
+          : detailPatientName;
+  
+        const refreshedRecords = updatedPatients
+          .filter(
+            (p) =>
+              p.patientName.toLowerCase().trim() ===
+              searchName.toLowerCase().trim(),
+          )
+          .sort((a, b) => {
+            const dateA = new Date(a.date).getTime() || 0;
+            const dateB = new Date(b.date).getTime() || 0;
+            return dateA - dateB;
+          });
         setDetailPatientRecords(refreshedRecords);
       }
     },
@@ -424,12 +514,21 @@ export default function App() {
           patient.fields['Admit Number'] = String(Math.floor(100000000 + Math.random() * 900000000));
         });
       }
-      // Ensure screeningDate is set
+      // Ensure screeningDate is set and right/left breast values exist
       checkResult.patients.forEach((patient) => {
         if (!patient.screeningDate) {
           const sdKey = Object.keys(patient.fields).find(k => k.toLowerCase().includes('screening date'));
           patient.screeningDate = sdKey ? patient.fields[sdKey] : patient.date || '(no date)';
         }
+        if (!patient.rightBreastValue) {
+          const rbKey = Object.keys(patient.fields).find(k => k.toLowerCase().includes('right breast'));
+          patient.rightBreastValue = rbKey ? patient.fields[rbKey] : '(empty)';
+        }
+        if (!patient.leftBreastValue) {
+          const lbKey = Object.keys(patient.fields).find(k => k.toLowerCase().includes('left breast'));
+          patient.leftBreastValue = lbKey ? patient.fields[lbKey] : '(empty)';
+        }
+        patient.isUr = isPatientUr(patient.rightBreastValue, patient.leftBreastValue);
       });
       if (loadedFile) {
         // Merge with existing data
@@ -1017,17 +1116,24 @@ export default function App() {
       {addRecordForPatient && (
         <AddRecordForPatientModal
           patientName={addRecordForPatient}
-          onClose={() => setAddRecordForPatient(null)}
+          onClose={() => {
+            setAddRecordForPatient(null);
+            // Reopen patient detail if it was hidden
+            if (detailPatientName) setPatientDetailVisible(true);
+          }}
           onSave={(data) => {
             handleSavePatient(data);
             setAddRecordForPatient(null);
+            // Go straight back to the patient detail screen
+            if (detailPatientName) {
+              setPatientDetailVisible(true);
+            }
           }}
           existingPatients={loadedFile?.result.patients}
         />
       )}
       {patientDetailVisible && detailPatientName && (
         <PatientDetailModal
-          key={detailRefreshKey}
           visible={patientDetailVisible}
           patientName={detailPatientName}
           records={detailPatientRecords}
@@ -1035,7 +1141,6 @@ export default function App() {
             setPatientDetailVisible(false);
             setDetailPatientName(null);
             setDetailPatientRecords([]);
-            
             if (statusBoardPatientName) {
               setStatusBoardVisible(true);
               setStatusBoardPatientName(null);
@@ -1065,27 +1170,31 @@ export default function App() {
                       ...loadedFile,
                       result: { ...loadedFile.result, patients: updatedPatients },
                     });
-                    
-                    const refreshedRecords = updatedPatients.filter(
-                      (pt) => pt.patientName.toLowerCase().trim() === p.patientName.toLowerCase().trim()
-                    ).sort((a, b) => {
-                      const dateA = new Date(a.date).getTime() || 0;
-                      const dateB = new Date(b.date).getTime() || 0;
-                      return dateA - dateB;
-                    });
+
+                    const refreshedRecords = updatedPatients
+                      .filter(
+                        (pt) =>
+                          pt.patientName.toLowerCase().trim() ===
+                          p.patientName.toLowerCase().trim()
+                      )
+                      .sort((a, b) => {
+                        const dateA = new Date(a.date).getTime() || 0;
+                        const dateB = new Date(b.date).getTime() || 0;
+                        return dateA - dateB;
+                      });
                     setDetailPatientRecords(refreshedRecords);
-                    
+
                     if (refreshedRecords.length === 0) {
                       setPatientDetailVisible(false);
                       setDetailPatientName(null);
                       setDetailPatientRecords([]);
-                      
+
                       if (statusBoardPatientName) {
                         setStatusBoardVisible(true);
                         setStatusBoardPatientName(null);
                       }
                     }
-                  }
+                  },
                 },
               ]
             );
@@ -1150,6 +1259,18 @@ function PatientListRow({
   onPress: () => void;
 }) {
   const latestRecord = group.records[group.records.length - 1];
+
+  // Safety guard for empty records (e.g. after name change)
+  if (!latestRecord) {
+    return (
+      <View style={{ padding: 20, alignItems: 'center' }}>
+        <Text style={{ color: '#9ca3af', fontSize: 16 }}>
+          Record not found. The patient name may have changed.
+        </Text>
+      </View>
+    );
+  }
+
   const screeningDate = latestRecord.screeningDate && latestRecord.screeningDate !== '(no date)' && latestRecord.screeningDate !== '(empty)'
     ? latestRecord.screeningDate.split(';')[0].trim()
     : '(no date)';
@@ -1236,9 +1357,11 @@ function PatientDetail({
 }) {
   const latestRecord = records[records.length - 1];
   const latestCategorized = categorizeFieldsForDisplay(latestRecord.fields);
-  
-  // Check if patient is UR (no referral dates needed)
   const isUr = latestRecord.isUr;
+
+  // Get display order with "Other Details" first
+    // Get display order with "Other Details" first
+    const displayOrder: FieldCategory[] = ['other' as FieldCategory, ...DISPLAY_ORDER.filter(cat => cat !== 'other')];
 
   return (
     <View style={styles.detailSection}>
@@ -1268,36 +1391,33 @@ function PatientDetail({
       />
       <View style={styles.detailCard}>
         <Text style={styles.detailCardTitle}>Latest Record Details</Text>
-        
-        {/* Vitals */}
-        {Object.keys(latestCategorized.vitals).length > 0 && (
-          <>
-            <Text style={styles.categoryLabel}>Vitals</Text>
-            {Object.entries(latestCategorized.vitals).map(([label, value]) => (
-              <DetailRow key={label} label={label} value={value} />
-            ))}
-          </>
-        )}
-        
-        {/* History */}
-        {Object.keys(latestCategorized.history).length > 0 && (
-          <>
-            <Text style={styles.categoryLabel}>History</Text>
-            {Object.entries(latestCategorized.history).map(([label, value]) => (
-              <DetailRow key={label} label={label} value={value} />
-            ))}
-          </>
-        )}
-        
-        {/* Other fields */}
-        {Object.keys(latestCategorized.others).length > 0 && (
-          <>
-            <Text style={styles.categoryLabel}>Other Details</Text>
-            {Object.entries(latestCategorized.others).map(([label, value]) => (
-              <DetailRow key={label} label={label} value={value} />
-            ))}
-          </>
-        )}
+
+        {/* Breast Findings */}
+        <Text style={styles.categorySubLabel}>Breast Findings</Text>
+        <DetailRow label="Right Breast" value={latestRecord.rightBreastValue || '(empty)'} />
+        <DetailRow label="Left Breast"  value={latestRecord.leftBreastValue  || '(empty)'} />
+
+        {/* All other grouped sections - Other Details first */}
+        {displayOrder
+          .filter((cat) => cat !== 'breastRight' && cat !== 'breastLeft')
+          .map((cat) => {
+            const entries = Object.entries(latestCategorized.grouped[cat] || {});
+            if (entries.length === 0) return null;
+
+            return (
+              <View key={cat}>
+                <Text style={styles.categorySubLabel}>
+                  {CATEGORY_LABELS[cat]}
+                </Text>
+
+                {entries
+                .filter(([_, value]) => value && value !== '(empty)' && value !== '')
+                .map(([label, value]) => (
+                  <DetailRow key={label} label={label} value={value} />
+                ))}
+              </View>
+            );
+          })}
       </View>
     </View>
   );
@@ -1318,6 +1438,10 @@ function AdmissionHistoryCard({
   const [historySearch, setHistorySearch] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
   const HISTORY_PER_PAGE = 10;
+
+  useEffect(() => {
+    setHistoryPage(0);
+  }, [records]);
 
   const sortedRecords = useMemo(() => {
     const arr = [...records];
@@ -1398,7 +1522,7 @@ function AdmissionHistoryCard({
                   </Text>
                 )}
                 <Text style={styles.admissionHistoryStatus}>
-                  Breast Status: {record.isUr ? 'UR' : record.breastValue}
+                  Right: {record.rightBreastValue} | Left: {record.leftBreastValue}
                 </Text>
                 <View style={styles.admissionActionRow}>
                   <Pressable style={styles.viewRecordBtn} onPress={() => onViewRecord(record)}>
@@ -1453,10 +1577,22 @@ function DetailRow({
   value: string;
   highlight?: boolean;
 }) {
+  const isBreastField = label?.toLowerCase?.() === 'right breast' || 
+                         label?.toLowerCase?.() === 'left breast';
+  const isUr = value?.toUpperCase?.() === 'UR';
+  
   return (
     <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
-      <Text style={[styles.detailValue, highlight && styles.detailValueHighlight]}>{value}</Text>
+      <Text style={styles.detailLabel}>{getDisplayLabel(label)}</Text>
+      <Text 
+        style={[
+          styles.detailValue, 
+          highlight && styles.detailValueHighlight,
+          isBreastField && (isUr ? styles.detailValueUr : styles.detailValueWarning)
+        ]}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
@@ -1469,7 +1605,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
         <View style={styles.aboutCard}>
           <Image source={teamSilayanLogo} style={styles.aboutLogo} resizeMode="contain" />
           <Text style={styles.aboutDescription}>
-            This app is a patient records management tool for breast screening. Add patient records manually. Each patient is listed with name, status, screening date, and referral date. Tap a name to view full admission history and details.
+          Silay is a community-centered offline digital platform for Brgy. Tagasilay that transforms breast and cervical cancer screening into care that sees every woman through.
           </Text>
           <Text style={styles.aboutCredit}>Created by: Team Silayan</Text>
           <Pressable style={styles.aboutCloseButton} onPress={onClose}>
@@ -1501,6 +1637,9 @@ function ViewRecordModal({
   const hasReferral = categorized.referralDates.length > 0 && 
                      categorized.referralDates[0] !== '(no date)' && 
                      categorized.referralDates[0] !== '(empty)';
+
+  // Get display order with "Other Details" first
+  const displayOrder: FieldCategory[] = ['other' as FieldCategory, ...DISPLAY_ORDER.filter(cat => cat !== 'other')];
 
   return (
     <Modal visible animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -1535,26 +1674,15 @@ function ViewRecordModal({
               {isUr ? '✓' : '⚠'}
             </Text>
             <Text style={[styles.statusTitle, { color: isUr ? '#065f46' : '#92400e' }]}>
-              {isUr ? 'Breast Status: UR' : 'Breast Status: Warning'}
+              {isUr ? 'Breast Status: UR' : 'Breast Status: Suspicious'}
             </Text>
             <Text style={[styles.statusMessage, { color: isUr ? '#0f5132' : '#664d03' }]}>
-              {isUr ? 'Unremarkable' : patient.breastValue}
+              Right: {patient.rightBreastValue} | Left: {patient.leftBreastValue}
             </Text>
             {isUr && (
               <Text style={[styles.statusMessage, { color: '#065f46', fontStyle: 'italic', fontSize: 13 }]}>
                 (No referral date required)
               </Text>
-            )}
-          </View>
-
-          <View style={styles.viewRecordSection}>
-            <Text style={styles.viewRecordSectionTitle}>Screening Dates</Text>
-            {categorized.screeningDates.length > 0 ? (
-              categorized.screeningDates.map((date, idx) => (
-                <Text key={idx} style={styles.viewRecordItem}>• {date}</Text>
-              ))
-            ) : (
-              <Text style={styles.viewRecordEmpty}>No screening dates</Text>
             )}
           </View>
 
@@ -1574,44 +1702,57 @@ function ViewRecordModal({
             </View>
           )}
 
-          {/* Vitals */}
-          {Object.keys(categorized.vitals).length > 0 && (
-            <View style={styles.viewRecordSection}>
-              <Text style={styles.viewRecordSectionTitle}>Vitals</Text>
-              {Object.entries(categorized.vitals).map(([label, value]) => (
-                <View key={label} style={styles.viewRecordFieldRow}>
-                  <Text style={styles.viewRecordFieldLabel}>{label.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
-                  <Text style={styles.viewRecordFieldValue}>{value || '(empty)'}</Text>
-                </View>
-              ))}
+          {/* Breast Findings */}
+          <View style={styles.viewRecordSection}>
+            <Text style={styles.viewRecordSectionTitle}>Breast Findings</Text>
+            <View style={styles.viewRecordFieldRow}>
+              <Text style={styles.viewRecordFieldLabel}>Right Breast</Text>
+              <Text 
+                style={[
+                  styles.viewRecordFieldValue,
+                  patient.rightBreastValue?.toUpperCase?.() === 'UR' 
+                    ? styles.viewRecordFieldValueUr 
+                    : styles.viewRecordFieldValueWarning
+                ]}
+              >
+                {patient.rightBreastValue || '(empty)'}
+              </Text>
             </View>
-          )}
+            <View style={styles.viewRecordFieldRow}>
+              <Text style={styles.viewRecordFieldLabel}>Left Breast</Text>
+              <Text 
+                style={[
+                  styles.viewRecordFieldValue,
+                  patient.leftBreastValue?.toUpperCase?.() === 'UR' 
+                    ? styles.viewRecordFieldValueUr 
+                    : styles.viewRecordFieldValueWarning
+                ]}
+              >
+                {patient.leftBreastValue || '(empty)'}
+              </Text>
+            </View>
+          </View>
 
-          {/* History */}
-          {Object.keys(categorized.history).length > 0 && (
-            <View style={styles.viewRecordSection}>
-              <Text style={styles.viewRecordSectionTitle}>History</Text>
-              {Object.entries(categorized.history).map(([label, value]) => (
-                <View key={label} style={styles.viewRecordFieldRow}>
-                  <Text style={styles.viewRecordFieldLabel}>{label.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
-                  <Text style={styles.viewRecordFieldValue}>{value || '(empty)'}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Other fields */}
-          {Object.keys(categorized.others).length > 0 && (
-            <View style={styles.viewRecordSection}>
-              <Text style={styles.viewRecordSectionTitle}>Other Details</Text>
-              {Object.entries(categorized.others).map(([label, value]) => (
-                <View key={label} style={styles.viewRecordFieldRow}>
-                  <Text style={styles.viewRecordFieldLabel}>{label.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
-                  <Text style={styles.viewRecordFieldValue}>{value || '(empty)'}</Text>
-                </View>
-              ))}
-            </View>
-          )}
+          {/* Filter OUT breast fields (they're already displayed above) */}
+          {displayOrder.filter(
+            (cat) => cat !== 'breastRight' && cat !== 'breastLeft'
+          ).map((cat) => {
+            const entries = Object.entries(categorized.grouped[cat] || {});
+            if (entries.length === 0) return null;
+            return (
+              <View key={cat} style={styles.viewRecordSection}>
+                <Text style={styles.viewRecordSectionTitle}>{CATEGORY_LABELS[cat]}</Text>
+                {entries
+                .filter(([_, value]) => value && value !== '(empty)' && value !== '')
+                .map(([label, value]) => (
+                  <View key={label} style={styles.viewRecordFieldRow}>
+                    <Text style={styles.viewRecordFieldLabel}>{getDisplayLabel(label)}</Text>
+                    <Text style={styles.viewRecordFieldValue}>{value || '(empty)'}</Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })}
 
           <Pressable style={styles.exportSingleBtn} onPress={onExport}>
             <LinearGradient
@@ -1637,10 +1778,15 @@ function EditRecordModal({
   onClose: () => void;
   onSave: (patient: PatientRecord) => void;
 }) {
+  // Guard against undefined patient
+  if (!patient || !patient.fields) {
+    return null;
+  }
   const [name, setName] = useState(patient.patientName);
   const [screeningDates, setScreeningDates] = useState<Array<{ id: string; value: string }>>([]);
   const [referralDates, setReferralDates] = useState<Array<{ id: string; value: string }>>([]);
-  const [breast, setBreast] = useState(patient.breastValue);
+  const [rightBreast, setRightBreast] = useState(patient.rightBreastValue || '(empty)');
+  const [leftBreast, setLeftBreast] = useState(patient.leftBreastValue || '(empty)');
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [datePicker, setDatePicker] = useState<DatePickerState>({
     visible: false,
@@ -1650,11 +1796,27 @@ function EditRecordModal({
     dateType: 'screening',
   });
 
-  const isUr = breast.toUpperCase() === 'UR';
+  const isUr = isPatientUr(rightBreast, leftBreast);
+
+  // Get field keys from the patient
+  const fieldKeys = useMemo(() => {
+    return Object.keys(patient.fields).filter((key) => {
+      const lowerKey = key.toLowerCase();
+      return (
+        !lowerKey.includes('name') &&
+        !lowerKey.includes('date') &&
+        !lowerKey.includes('breast') &&
+        !lowerKey.includes('admit number') &&
+        !lowerKey.includes('admit no') &&
+        !lowerKey.includes('screening')
+      );
+    });
+  }, [patient]);
 
   useEffect(() => {
     setName(patient.patientName);
-    setBreast(patient.breastValue);
+    setRightBreast(patient.rightBreastValue || '(empty)');
+    setLeftBreast(patient.leftBreastValue || '(empty)');
 
     const rawScreening = patient.screeningDate || '';
     if (rawScreening && rawScreening !== '(no date)' && rawScreening !== '(empty)') {
@@ -1675,7 +1837,8 @@ function EditRecordModal({
     const otherFields: Record<string, string> = {};
     Object.entries(patient.fields).forEach(([key, value]) => {
       const lower = key.toLowerCase();
-      if (!lower.includes('name') && !lower.includes('date') && !lower.includes('breast')) {
+      if (!lower.includes('name') && !lower.includes('date') && !lower.includes('breast') &&
+          !lower.includes('admit number') && !lower.includes('admit no') && !lower.includes('screening')) {
         otherFields[key] = value;
       }
     });
@@ -1764,25 +1927,42 @@ function EditRecordModal({
     const nameKey = allKeys.find((k) => k.toLowerCase() === 'name' || k.toLowerCase().includes('patient name')) || 'name';
     const dateKey = allKeys.find((k) => k.toLowerCase() === 'date' || k.toLowerCase().includes('referral date')) || 'date';
     const screeningKey = allKeys.find((k) => k.toLowerCase().includes('screening date')) || 'Screening Date';
-    const breastKey = allKeys.find((k) => k.toLowerCase() === 'breast') || 'Breast';
+    const rightBreastKey = allKeys.find((k) => k.toLowerCase().includes('right breast')) || 'Right Breast';
+    const leftBreastKey = allKeys.find((k) => k.toLowerCase().includes('left breast')) || 'Left Breast';
 
     updatedFields[nameKey] = name.trim();
     updatedFields[dateKey] = combinedReferral;
     updatedFields[screeningKey] = combinedScreening;
-    updatedFields[breastKey] = breast.trim();
+    updatedFields[rightBreastKey] = rightBreast.trim();
+    updatedFields[leftBreastKey] = leftBreast.trim();
 
     const admitNoKey = allKeys.find((k) => k.toLowerCase().includes('admit number'));
     if (admitNoKey) {
       updatedFields[admitNoKey] = patient.fields[admitNoKey];
     }
 
+    // Compute breastValue for display
+    const rightIsUr = rightBreast.toUpperCase() === 'UR';
+    const leftIsUr = leftBreast.toUpperCase() === 'UR';
+    const isUrComputed = rightIsUr && leftIsUr;
+    const breastValue = isUrComputed
+      ? 'UR'
+      : [
+          !rightIsUr && rightBreast ? `R: ${rightBreast}` : '',
+          !leftIsUr && leftBreast ? `L: ${leftBreast}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ') || '(empty)';
+
     const updatedPatient: PatientRecord = {
       ...patient,
       patientName: name.trim(),
       date: primaryReferral,
       screeningDate: primaryScreening,
-      breastValue: breast.trim(),
-      isUr: isUr,
+      breastValue,
+      rightBreastValue: rightBreast.trim(),
+      leftBreastValue: leftBreast.trim(),
+      isUr: isUrComputed,
       fields: updatedFields,
     };
 
@@ -1790,8 +1970,19 @@ function EditRecordModal({
   };
 
   // Categorize fields for grouped display
-  const editFieldKeys = Object.keys(fieldValues);
-  const { vitals: editVitalKeys, history: editHistoryKeys, others: editOtherKeys } = categorizeFieldKeys(editFieldKeys);
+  const {
+    menstrualHistory: editMenstrualHistory,
+    pregnancyHistory: editPregnancyHistory,
+    contraceptiveUse: editContraceptiveUse,
+    sexualHistory: editSexualHistory,
+    familySocialHistory: editFamilySocialHistory,
+    medicalHistory: editMedicalHistory,
+    vitalSigns: editVitalSigns,
+    anthropometric: editAnthropometric,
+    physicalExam: editPhysicalExam,
+    demographics: editDemographics,
+    other: editOtherKeys,
+  } = categorizeFieldKeys(fieldKeys);
 
   return (
     <Modal visible animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -1905,54 +2096,73 @@ function EditRecordModal({
             )}
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Breast / Status</Text>
+              <Text style={styles.formLabel}>Right Breast</Text>
               <TextInput
                 style={styles.formInput}
-                placeholder="e.g. UR, Warning"
+                placeholder="e.g. UR, Suspicious"
                 placeholderTextColor="#64748b"
-                value={breast}
-                onChangeText={setBreast}
+                value={rightBreast}
+                onChangeText={setRightBreast}
               />
-              <View style={styles.quickStatusRow}>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() === 'UR' && styles.quickStatusBtnActiveUr,
-                  ]}
-                  onPress={() => setBreast('UR')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() === 'UR' && { color: '#065f46' }
-                  ]}>Set UR</Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && styles.quickStatusBtnActiveNotUr,
-                  ]}
-                  onPress={() => setBreast('Warning')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && { color: '#92400e' }
-                  ]}>Warning</Text>
-                </Pressable>
-              </View>
             </View>
 
-            {/* Grouped fields */}
-            {editVitalKeys.length > 0 && (
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Left Breast</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="e.g. UR, Suspicious"
+                placeholderTextColor="#64748b"
+                value={leftBreast}
+                onChangeText={setLeftBreast}
+              />
+            </View>
+
+            <View style={styles.quickStatusRow}>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  isUr && styles.quickStatusBtnActiveUr,
+                ]}
+                onPress={() => {
+                  setRightBreast('UR');
+                  setLeftBreast('UR');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  isUr && { color: '#065f46' }
+                ]}>UR (Both)</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  !isUr && (rightBreast !== '(empty)' || leftBreast !== '(empty)') && styles.quickStatusBtnActiveNotUr,
+                ]}
+                onPress={() => {
+                  if (rightBreast === 'UR' || rightBreast === '(empty)') setRightBreast('Suspicious');
+                  if (leftBreast === 'UR' || leftBreast === '(empty)') setLeftBreast('Suspicious');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  !isUr && (rightBreast !== '(empty)' || leftBreast !== '(empty)') && { color: '#92400e' }
+                ]}>Suspicious</Text>
+              </Pressable>
+            </View>
+
+            {/* All categorized fields */}
+            {/* Demographics */}
+            {editDemographics.length > 0 && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>Vitals</Text>
-                {editVitalKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>Patient Demographics</Text>
+                {editDemographics.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -1962,17 +2172,84 @@ function EditRecordModal({
               </View>
             )}
 
-            {editHistoryKeys.length > 0 && (
+            {/* OB-GYNE History */}
+            {(editMenstrualHistory.length > 0 || editPregnancyHistory.length > 0 || editContraceptiveUse.length > 0) && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>History</Text>
-                {editHistoryKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>OB-GYNE History</Text>              
+                {editMenstrualHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Menstrual History</Text>
+                    {editMenstrualHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {editPregnancyHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Pregnancy History</Text>
+                    {editPregnancyHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {editContraceptiveUse.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Contraceptive Use</Text>
+                    {editContraceptiveUse.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* Sexual History */}
+            {editSexualHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Sexual History</Text>
+                {editSexualHistory.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -1982,26 +2259,130 @@ function EditRecordModal({
               </View>
             )}
 
+            {/* Family & Social History */}
+            {editFamilySocialHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Family & Social History</Text>
+                {editFamilySocialHistory.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Medical History */}
+            {editMedicalHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Medical History</Text>
+                {editMedicalHistory.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Vital Signs */}
+            {editVitalSigns.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Vital Signs</Text>
+                {editVitalSigns.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Anthropometric */}
+            {editAnthropometric.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Anthropometric</Text>
+                {editAnthropometric.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Physical Examination */}
+            {editPhysicalExam.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Physical Examination</Text>
+                {editPhysicalExam.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Other */}
             {editOtherKeys.length > 0 && (
-              <>
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionHeaderTitle}>Other Fields</Text>
-                </View>
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Other Details</Text>
                 {editOtherKeys.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
                     />
                   </View>
                 ))}
-              </>
+              </View>
             )}
 
             <Pressable style={[styles.saveBtn, { marginTop: 32 }]} onPress={handleSave}>
@@ -2032,38 +2413,85 @@ function todayString(): string {
   return `${mm}/${dd}/${yyyy}`;
 }
 
-/** Split field keys into Vitals, History, and Others for grouped display */
+/** Split field keys into grouped display categories for edit/add forms */
 function categorizeFieldKeys(keys: string[]) {
-  const vitals: string[] = [];
-  const history: string[] = [];
-  const others: string[] = [];
+  const menstrualHistory: string[] = [];
+  const pregnancyHistory: string[] = [];
+  const contraceptiveUse: string[] = [];
+  const sexualHistory: string[] = [];
+  const familySocialHistory: string[] = [];
+  const medicalHistory: string[] = [];
+  const vitalSigns: string[] = [];
+  const anthropometric: string[] = [];
+  const physicalExam: string[] = [];
+  const demographics: string[] = [];
+  const other: string[] = [];
+
+  // Group definitions – extended with variations
+  const menstrualSet = new Set([
+    'menarche', 'lmp', 'aog', 'menstrual bleeding pattern', 'no. of pads/day', 'no. of pads'
+  ]);
+  const pregnancySet = new Set([
+    'pregnancy history', 'gtpal', 'age at first full term pregnancy'
+  ]);
+  const contraceptiveSet = new Set([
+    'oral contraceptives use', 'oral contraceptive use', 'duration of usage of oral contraceptives'
+  ]);
+  const sexualSet = new Set([
+    'age of first intercourse', 'no. of sexual partner', 'no. of sexual partners', 'spouse/partner/s'
+  ]);
+  const familySocialSet = new Set([
+    'family history of cancer', 'smoking'
+  ]);
+  const medicalSet = new Set([
+    'current medication', 'allergies', 'abdominal surgery',
+    'history of previous cervical cancer screening',
+    'history of abnormal vaginal discharge',
+    'history of abnormal vaginal bleeding'
+  ]);
+  const vitalSet = new Set([
+    'bp', 'temp', 'hr', 'rr', 'temperature', 'blood pressure', 'pulse rate', 'respiratory rate'
+  ]);
+  const anthropometricSet = new Set([
+    'height (cm)', 'height', 'weight (kg)', 'weight', 'bmi'
+  ]);
+  const physicalExamSet = new Set([
+    'skin', 'heent', 'chest and lungs', 'chest and luns', 'heart', 'abdomen'
+  ]);
+  const demographicSet = new Set([
+    'id no. (hosp)', 'age', 'address', 'contact no.', 'civil status', 'no. of children'
+  ]);
 
   keys.forEach((key) => {
     const lower = key.toLowerCase().trim();
-    if (
-      lower === 'bp' ||
-      lower === 'temp' ||
-      lower === 'pr' ||
-      lower === 'rr' ||
-      lower === 'temperature' ||
-      lower === 'blood pressure' ||
-      lower === 'pulse rate' ||
-      lower === 'respiratory rate'
-    ) {
-      vitals.push(key);
-    } else if (
-      lower === 'family hx of cancer' ||
-      lower === 'smoking hx' ||
-      (lower.includes('family') && lower.includes('cancer')) ||
-      (lower.includes('smoking') && lower.includes('hx'))
-    ) {
-      history.push(key);
+
+    // --- Most specific first ---
+    if (menstrualSet.has(lower) || [...menstrualSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      menstrualHistory.push(key);
+    } else if (pregnancySet.has(lower) || [...pregnancySet].some((k) => lower.includes(k) && lower.length > 3)) {
+      pregnancyHistory.push(key);
+    } else if (contraceptiveSet.has(lower) || [...contraceptiveSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      contraceptiveUse.push(key);
+    } else if (sexualSet.has(lower) || [...sexualSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      sexualHistory.push(key);
+    } else if (familySocialSet.has(lower) || [...familySocialSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      familySocialHistory.push(key);
+    } else if (medicalSet.has(lower) || [...medicalSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      medicalHistory.push(key);
+    } else if (vitalSet.has(lower) || [...vitalSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      vitalSigns.push(key);
+    } else if (anthropometricSet.has(lower) || [...anthropometricSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      anthropometric.push(key);
+    } else if (physicalExamSet.has(lower) || [...physicalExamSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      physicalExam.push(key);
+    } else if (demographicSet.has(lower) || [...demographicSet].some((k) => lower.includes(k) && lower.length > 3)) {
+      demographics.push(key);
     } else {
-      others.push(key);
+      other.push(key);
     }
   });
 
-  return { vitals, history, others };
+  return { menstrualHistory, pregnancyHistory, contraceptiveUse, sexualHistory, familySocialHistory, medicalHistory, vitalSigns, anthropometric, physicalExam, demographics, other };
 }
 
 function checkDuplicateDate(
@@ -2117,6 +2545,8 @@ function AddPatientModal({
     patientName: string;
     date: string;
     screeningDate: string;
+    rightBreastValue: string;
+    leftBreastValue: string;
     breastValue: string;
     fields: Record<string, string>;
   }) => void;
@@ -2126,7 +2556,8 @@ function AddPatientModal({
   const [screeningDates, setScreeningDates] = useState<Array<{ id: string; value: string }>>([{ id: 'init', value: todayString() }]);
   const [referralDates, setReferralDates] = useState<Array<{ id: string; value: string }>>([]);
   const [admitNumber, setAdmitNumber] = useState('');
-  const [breast, setBreast] = useState('UR');
+  const [rightBreast, setRightBreast] = useState('UR');
+  const [leftBreast, setLeftBreast] = useState('UR');
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [customFields, setCustomFields] = useState<Array<{ id: string; label: string; value: string }>>([]);
   const [datePicker, setDatePicker] = useState<DatePickerState>({
@@ -2137,35 +2568,27 @@ function AddPatientModal({
     dateType: 'screening',
   });
 
-  const isUr = breast.toUpperCase() === 'UR';
+  const isUr = isPatientUr(rightBreast, leftBreast);
 
+  // Use EXCEL_FIELD_KEYS merged with existing patient fields
   const fieldKeys = useMemo(() => {
+    const baseKeys = EXCEL_FIELD_KEYS;
     if (existingPatients && existingPatients.length > 0) {
-      const keys = Object.keys(existingPatients[0].fields);
-      return keys.filter((key) => {
+      const existingKeys = Object.keys(existingPatients[0].fields);
+      const allKeys = Array.from(new Set([...baseKeys, ...existingKeys]));
+      return allKeys.filter((key) => {
         const lowerKey = key.toLowerCase();
         return (
           !lowerKey.includes('name') &&
           !lowerKey.includes('date') &&
           !lowerKey.includes('breast') &&
           !lowerKey.includes('admit number') &&
-          !lowerKey.includes('admit no')
+          !lowerKey.includes('admit no') &&
+          !lowerKey.includes('screening')
         );
       });
     }
-    return [
-      'ID no. (Hosp)',
-      'age',
-      'address',
-      'civil status',
-      'BP',
-      'Temp',
-      'PR',
-      'RR',
-      'family hx of cancer',
-      'Smoking hx',
-      'Allergies',
-    ];
+    return baseKeys;
   }, [existingPatients]);
 
   useEffect(() => {
@@ -2174,7 +2597,8 @@ function AddPatientModal({
       setScreeningDates([{ id: 'init', value: todayString() }]);
       setReferralDates([]);
       setAdmitNumber(generateAdmitNumber());
-      setBreast('UR');
+      setRightBreast('UR');
+      setLeftBreast('UR');
       const initialValues: Record<string, string> = {};
       fieldKeys.forEach((key) => { initialValues[key] = ''; });
       setFieldValues(initialValues);
@@ -2275,7 +2699,9 @@ function AddPatientModal({
     let nameKey = 'name';
     let dateKey = 'date';
     let screeningKey = 'Screening Date';
-    let breastKey = 'Breast';
+    let rightBreastKey = 'Right Breast';
+    let leftBreastKey = 'Left Breast';
+    let admitKey = 'Admit Number';
 
     if (existingPatients && existingPatients.length > 0) {
       const firstPatientKeys = Object.keys(existingPatients[0].fields);
@@ -2291,8 +2717,14 @@ function AddPatientModal({
       const foundScreeningKey = firstPatientKeys.find((k) => k.toLowerCase().includes('screening date'));
       if (foundScreeningKey) screeningKey = foundScreeningKey;
 
-      const foundBreastKey = firstPatientKeys.find((k) => k.toLowerCase() === 'breast');
-      if (foundBreastKey) breastKey = foundBreastKey;
+      const foundRightBreastKey = firstPatientKeys.find((k) => k.toLowerCase().includes('right breast'));
+      if (foundRightBreastKey) rightBreastKey = foundRightBreastKey;
+
+      const foundLeftBreastKey = firstPatientKeys.find((k) => k.toLowerCase().includes('left breast'));
+      if (foundLeftBreastKey) leftBreastKey = foundLeftBreastKey;
+
+      const foundAdmitKey = firstPatientKeys.find((k) => k.toLowerCase().includes('admit number') || k.toLowerCase().includes('admit no'));
+      if (foundAdmitKey) admitKey = foundAdmitKey;
 
       firstPatientKeys.forEach((k) => {
         if (k === nameKey) {
@@ -2301,8 +2733,12 @@ function AddPatientModal({
           finalFields[k] = combinedReferral;
         } else if (k === screeningKey) {
           finalFields[k] = combinedScreening;
-        } else if (k === breastKey) {
-          finalFields[k] = breast.trim();
+        } else if (k === rightBreastKey) {
+          finalFields[k] = rightBreast.trim();
+        } else if (k === leftBreastKey) {
+          finalFields[k] = leftBreast.trim();
+        } else if (k === admitKey) {
+          finalFields[k] = admitNumber.trim();
         } else {
           finalFields[k] = (fieldValues[k] || '').trim();
         }
@@ -2312,12 +2748,15 @@ function AddPatientModal({
       finalFields['Referral Date'] = combinedReferral;
       finalFields['Admit Number'] = admitNumber.trim();
       finalFields['name'] = name.trim();
-      finalFields['Breast'] = breast.trim();
-      Object.entries(fieldValues).forEach(([k, v]) => {
-        finalFields[k] = (v || '').trim();
+      finalFields['Right Breast'] = rightBreast.trim();
+      finalFields['Left Breast'] = leftBreast.trim();
+      // Add all Excel fields
+      fieldKeys.forEach((key) => {
+        finalFields[key] = (fieldValues[key] || '').trim();
       });
     }
 
+    // Ensure admit number is always present
     finalFields['Admit Number'] = admitNumber.trim();
 
     customFields.forEach((cf) => {
@@ -2326,11 +2765,26 @@ function AddPatientModal({
       }
     });
 
+    // Compute breastValue for display
+    const rightIsUr = rightBreast.toUpperCase() === 'UR';
+    const leftIsUr = leftBreast.toUpperCase() === 'UR';
+    const isUrComputed = rightIsUr && leftIsUr;
+    const breastValue = isUrComputed
+      ? 'UR'
+      : [
+          !rightIsUr && rightBreast ? `R: ${rightBreast}` : '',
+          !leftIsUr && leftBreast ? `L: ${leftBreast}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ') || '(empty)';
+
     onSave({
       patientName: name.trim(),
       date: primaryReferral,
       screeningDate: primaryScreening,
-      breastValue: breast.trim(),
+      rightBreastValue: rightBreast.trim(),
+      leftBreastValue: leftBreast.trim(),
+      breastValue,
       fields: finalFields,
     });
   };
@@ -2351,7 +2805,19 @@ function AddPatientModal({
     checkDuplicateDate(name.trim(), newScreeningValues, existingPatients, proceedWithSave, 'screening');
   };
 
-  const { vitals: vitalKeys, history: historyKeys, others: otherFieldKeys } = categorizeFieldKeys(fieldKeys);
+  const {
+    menstrualHistory,
+    pregnancyHistory,
+    contraceptiveUse,
+    sexualHistory,
+    familySocialHistory,
+    medicalHistory,
+    vitalSigns,
+    anthropometric,
+    physicalExam,
+    demographics,
+    other,
+  } = categorizeFieldKeys(fieldKeys);
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -2483,54 +2949,73 @@ function AddPatientModal({
             )}
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Breast / Status</Text>
+              <Text style={styles.formLabel}>Right Breast *</Text>
               <TextInput
                 style={styles.formInput}
-                placeholder="e.g. UR, Warning"
+                placeholder="e.g. UR, Suspicious"
                 placeholderTextColor="#64748b"
-                value={breast}
-                onChangeText={setBreast}
+                value={rightBreast}
+                onChangeText={setRightBreast}
               />
-              <View style={styles.quickStatusRow}>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() === 'UR' && styles.quickStatusBtnActiveUr,
-                  ]}
-                  onPress={() => setBreast('UR')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() === 'UR' && { color: '#065f46' }
-                  ]}>Set UR</Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && styles.quickStatusBtnActiveNotUr,
-                  ]}
-                  onPress={() => setBreast('Warning')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && { color: '#92400e' }
-                  ]}>Warning</Text>
-                </Pressable>
-              </View>
             </View>
 
-            {/* Grouped fields */}
-            {vitalKeys.length > 0 && (
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Left Breast *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="e.g. UR, Suspicious"
+                placeholderTextColor="#64748b"
+                value={leftBreast}
+                onChangeText={setLeftBreast}
+              />
+            </View>
+
+            <View style={styles.quickStatusRow}>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  isUr && styles.quickStatusBtnActiveUr,
+                ]}
+                onPress={() => {
+                  setRightBreast('UR');
+                  setLeftBreast('UR');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  isUr && { color: '#065f46' }
+                ]}>UR (Both)</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  !isUr && (rightBreast !== 'UR' || leftBreast !== 'UR') && styles.quickStatusBtnActiveNotUr,
+                ]}
+                onPress={() => {
+                  if (rightBreast === 'UR' || rightBreast === '') setRightBreast('Suspicious');
+                  if (leftBreast === 'UR' || leftBreast === '') setLeftBreast('Suspicious');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  !isUr && (rightBreast !== 'UR' || leftBreast !== 'UR') && { color: '#92400e' }
+                ]}>Suspicious</Text>
+              </Pressable>
+            </View>
+
+            {/* All categorized fields */}
+            {/* Demographics */}
+            {demographics.length > 0 && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>Vitals</Text>
-                {vitalKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>Patient Demographics</Text>
+                {demographics.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -2540,17 +3025,85 @@ function AddPatientModal({
               </View>
             )}
 
-            {historyKeys.length > 0 && (
+            {/* OB-GYNE History */}
+            {(menstrualHistory.length > 0 || pregnancyHistory.length > 0 || contraceptiveUse.length > 0) && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>History</Text>
-                {historyKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>OB-GYNE History</Text>
+                
+                {menstrualHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Menstrual History</Text>
+                    {menstrualHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {pregnancyHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Pregnancy History</Text>
+                    {pregnancyHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {contraceptiveUse.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Contraceptive Use</Text>
+                    {contraceptiveUse.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* Sexual History */}
+            {sexualHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Sexual History</Text>
+                {sexualHistory.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -2560,26 +3113,130 @@ function AddPatientModal({
               </View>
             )}
 
-            {otherFieldKeys.length > 0 && (
-              <>
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionHeaderTitle}>Additional Details</Text>
-                </View>
-                {otherFieldKeys.map((key) => (
+            {/* Family & Social History */}
+            {familySocialHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Family & Social History</Text>
+                {familySocialHistory.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
                     />
                   </View>
                 ))}
-              </>
+              </View>
+            )}
+
+            {/* Medical History */}
+            {medicalHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Medical History</Text>
+                {medicalHistory.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Vital Signs */}
+            {vitalSigns.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Vital Signs</Text>
+                {vitalSigns.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Anthropometric */}
+            {anthropometric.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Anthropometric</Text>
+                {anthropometric.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Physical Examination */}
+            {physicalExam.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Physical Examination</Text>
+                {physicalExam.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Other */}
+            {other.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Other Details</Text>
+                {other.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
             )}
 
             {customFields.length > 0 && (
@@ -2645,6 +3302,8 @@ function AddRecordForPatientModal({
     patientName: string;
     date: string;
     screeningDate: string;
+    rightBreastValue: string;
+    leftBreastValue: string;
     breastValue: string;
     fields: Record<string, string>;
   }) => void;
@@ -2654,7 +3313,8 @@ function AddRecordForPatientModal({
   const [screeningDates, setScreeningDates] = useState<Array<{ id: string; value: string }>>([{ id: 'init', value: todayString() }]);
   const [referralDates, setReferralDates] = useState<Array<{ id: string; value: string }>>([]);
   const [admitNumber, setAdmitNumber] = useState(generateAdmitNumber());
-  const [breast, setBreast] = useState('UR');
+  const [rightBreast, setRightBreast] = useState('UR');
+  const [leftBreast, setLeftBreast] = useState('UR');
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [customFields, setCustomFields] = useState<Array<{ id: string; label: string; value: string }>>([]);
   const [datePicker, setDatePicker] = useState<DatePickerState>({
@@ -2665,35 +3325,27 @@ function AddRecordForPatientModal({
     dateType: 'screening',
   });
 
-  const isUr = breast.toUpperCase() === 'UR';
+  const isUr = isPatientUr(rightBreast, leftBreast);
 
+  // Use EXCEL_FIELD_KEYS merged with existing patient fields
   const fieldKeys = useMemo(() => {
+    const baseKeys = EXCEL_FIELD_KEYS;
     if (existingPatients && existingPatients.length > 0) {
-      const keys = Object.keys(existingPatients[0].fields);
-      return keys.filter((key) => {
+      const existingKeys = Object.keys(existingPatients[0].fields);
+      const allKeys = Array.from(new Set([...baseKeys, ...existingKeys]));
+      return allKeys.filter((key) => {
         const lowerKey = key.toLowerCase();
         return (
           !lowerKey.includes('name') &&
           !lowerKey.includes('date') &&
           !lowerKey.includes('breast') &&
           !lowerKey.includes('admit number') &&
-          !lowerKey.includes('admit no')
+          !lowerKey.includes('admit no') &&
+          !lowerKey.includes('screening')
         );
       });
     }
-    return [
-      'ID no. (Hosp)',
-      'age',
-      'address',
-      'civil status',
-      'BP',
-      'Temp',
-      'PR',
-      'RR',
-      'family hx of cancer',
-      'Smoking hx',
-      'Allergies',
-    ];
+    return baseKeys;
   }, [existingPatients]);
 
   // Pre-fills Breast, custom fields, and all other details from the patient's latest record
@@ -2712,7 +3364,8 @@ function AddRecordForPatientModal({
       setScreeningDates([{ id: 'init', value: todayString() }]);
       setReferralDates([]);
       setAdmitNumber(generateAdmitNumber());
-      setBreast(latest.breastValue || 'UR');
+      setRightBreast(latest.rightBreastValue || 'UR');
+      setLeftBreast(latest.leftBreastValue || 'UR');
 
       const initialValues: Record<string, string> = {};
       fieldKeys.forEach((key) => {
@@ -2724,7 +3377,8 @@ function AddRecordForPatientModal({
       setScreeningDates([{ id: 'init', value: todayString() }]);
       setReferralDates([]);
       setAdmitNumber(generateAdmitNumber());
-      setBreast('UR');
+      setRightBreast('UR');
+      setLeftBreast('UR');
       const initialValues: Record<string, string> = {};
       fieldKeys.forEach((key) => { initialValues[key] = ''; });
       setFieldValues(initialValues);
@@ -2825,7 +3479,9 @@ function AddRecordForPatientModal({
     let nameKey = 'name';
     let dateKey = 'date';
     let screeningKey = 'Screening Date';
-    let breastKey = 'Breast';
+    let rightBreastKey = 'Right Breast';
+    let leftBreastKey = 'Left Breast';
+    let admitKey = 'Admit Number';
 
     if (existingPatients && existingPatients.length > 0) {
       const firstPatientKeys = Object.keys(existingPatients[0].fields);
@@ -2841,8 +3497,14 @@ function AddRecordForPatientModal({
       const foundScreeningKey = firstPatientKeys.find((k) => k.toLowerCase().includes('screening date'));
       if (foundScreeningKey) screeningKey = foundScreeningKey;
 
-      const foundBreastKey = firstPatientKeys.find((k) => k.toLowerCase() === 'breast');
-      if (foundBreastKey) breastKey = foundBreastKey;
+      const foundRightBreastKey = firstPatientKeys.find((k) => k.toLowerCase().includes('right breast'));
+      if (foundRightBreastKey) rightBreastKey = foundRightBreastKey;
+
+      const foundLeftBreastKey = firstPatientKeys.find((k) => k.toLowerCase().includes('left breast'));
+      if (foundLeftBreastKey) leftBreastKey = foundLeftBreastKey;
+
+      const foundAdmitKey = firstPatientKeys.find((k) => k.toLowerCase().includes('admit number') || k.toLowerCase().includes('admit no'));
+      if (foundAdmitKey) admitKey = foundAdmitKey;
 
       firstPatientKeys.forEach((k) => {
         if (k === nameKey) {
@@ -2851,8 +3513,12 @@ function AddRecordForPatientModal({
           finalFields[k] = combinedReferral;
         } else if (k === screeningKey) {
           finalFields[k] = combinedScreening;
-        } else if (k === breastKey) {
-          finalFields[k] = breast.trim();
+        } else if (k === rightBreastKey) {
+          finalFields[k] = rightBreast.trim();
+        } else if (k === leftBreastKey) {
+          finalFields[k] = leftBreast.trim();
+        } else if (k === admitKey) {
+          finalFields[k] = admitNumber.trim();
         } else {
           finalFields[k] = (fieldValues[k] || '').trim();
         }
@@ -2862,9 +3528,10 @@ function AddRecordForPatientModal({
       finalFields['Referral Date'] = combinedReferral;
       finalFields['Admit Number'] = admitNumber.trim();
       finalFields['name'] = name.trim();
-      finalFields['Breast'] = breast.trim();
-      Object.entries(fieldValues).forEach(([k, v]) => {
-        finalFields[k] = (v || '').trim();
+      finalFields['Right Breast'] = rightBreast.trim();
+      finalFields['Left Breast'] = leftBreast.trim();
+      fieldKeys.forEach((key) => {
+        finalFields[key] = (fieldValues[key] || '').trim();
       });
     }
 
@@ -2876,11 +3543,26 @@ function AddRecordForPatientModal({
       }
     });
 
+    // Compute breastValue for display
+    const rightIsUr = rightBreast.toUpperCase() === 'UR';
+    const leftIsUr = leftBreast.toUpperCase() === 'UR';
+    const isUrComputed = rightIsUr && leftIsUr;
+    const breastValue = isUrComputed
+      ? 'UR'
+      : [
+          !rightIsUr && rightBreast ? `R: ${rightBreast}` : '',
+          !leftIsUr && leftBreast ? `L: ${leftBreast}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ') || '(empty)';
+
     onSave({
       patientName: name.trim(),
       date: primaryReferral,
       screeningDate: primaryScreening,
-      breastValue: breast.trim(),
+      rightBreastValue: rightBreast.trim(),
+      leftBreastValue: leftBreast.trim(),
+      breastValue,
       fields: finalFields,
     });
   };
@@ -2901,7 +3583,19 @@ function AddRecordForPatientModal({
     checkDuplicateDate(name.trim(), newScreeningValues, existingPatients, proceedWithSave, 'screening');
   };
 
-  const { vitals: vitalKeys, history: historyKeys, others: otherFieldKeys } = categorizeFieldKeys(fieldKeys);
+  const {
+    menstrualHistory,
+    pregnancyHistory,
+    contraceptiveUse,
+    sexualHistory,
+    familySocialHistory,
+    medicalHistory,
+    vitalSigns,
+    anthropometric,
+    physicalExam,
+    demographics,
+    other,
+  } = categorizeFieldKeys(fieldKeys);
 
   return (
     <Modal visible animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -3033,54 +3727,73 @@ function AddRecordForPatientModal({
             )}
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Breast / Status</Text>
+              <Text style={styles.formLabel}>Right Breast *</Text>
               <TextInput
                 style={styles.formInput}
-                placeholder="e.g. UR, Warning"
+                placeholder="e.g. UR, Suspicious"
                 placeholderTextColor="#64748b"
-                value={breast}
-                onChangeText={setBreast}
+                value={rightBreast}
+                onChangeText={setRightBreast}
               />
-              <View style={styles.quickStatusRow}>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() === 'UR' && styles.quickStatusBtnActiveUr,
-                  ]}
-                  onPress={() => setBreast('UR')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() === 'UR' && { color: '#065f46' }
-                  ]}>Set UR</Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.quickStatusBtn,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && styles.quickStatusBtnActiveNotUr,
-                  ]}
-                  onPress={() => setBreast('Warning')}
-                >
-                  <Text style={[
-                    styles.quickStatusBtnText,
-                    breast.toUpperCase() !== 'UR' && breast !== '' && { color: '#92400e' }
-                  ]}>Warning</Text>
-                </Pressable>
-              </View>
             </View>
 
-            {/* Grouped fields */}
-            {vitalKeys.length > 0 && (
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Left Breast *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="e.g. UR, Suspicious"
+                placeholderTextColor="#64748b"
+                value={leftBreast}
+                onChangeText={setLeftBreast}
+              />
+            </View>
+
+            <View style={styles.quickStatusRow}>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  isUr && styles.quickStatusBtnActiveUr,
+                ]}
+                onPress={() => {
+                  setRightBreast('UR');
+                  setLeftBreast('UR');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  isUr && { color: '#065f46' }
+                ]}>UR (Both)</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.quickStatusBtn,
+                  !isUr && (rightBreast !== 'UR' || leftBreast !== 'UR') && styles.quickStatusBtnActiveNotUr,
+                ]}
+                onPress={() => {
+                  if (rightBreast === 'UR' || rightBreast === '') setRightBreast('Suspicious');
+                  if (leftBreast === 'UR' || leftBreast === '') setLeftBreast('Suspicious');
+                }}
+              >
+                <Text style={[
+                  styles.quickStatusBtnText,
+                  !isUr && (rightBreast !== 'UR' || leftBreast !== 'UR') && { color: '#92400e' }
+                ]}>Suspicious</Text>
+              </Pressable>
+            </View>
+
+            {/* All categorized fields */}
+            {/* Demographics */}
+            {demographics.length > 0 && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>Vitals</Text>
-                {vitalKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>Patient Demographics</Text>
+                {demographics.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -3090,17 +3803,85 @@ function AddRecordForPatientModal({
               </View>
             )}
 
-            {historyKeys.length > 0 && (
+            {/* OB-GYNE History */}
+            {(menstrualHistory.length > 0 || pregnancyHistory.length > 0 || contraceptiveUse.length > 0) && (
               <View style={styles.groupBox}>
-                <Text style={styles.groupBoxTitle}>History</Text>
-                {historyKeys.map((key) => (
+                <Text style={styles.groupBoxTitle}>OB-GYNE History</Text>
+                
+                {menstrualHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Menstrual History</Text>
+                    {menstrualHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {pregnancyHistory.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Pregnancy History</Text>
+                    {pregnancyHistory.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+                
+                {contraceptiveUse.length > 0 && (
+                  <>
+                    <Text style={styles.categorySubLabel}>Contraceptive Use</Text>
+                    {contraceptiveUse.map((key) => (
+                      <View style={styles.formGroup} key={key}>
+                        <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={`Enter ${key.toLowerCase()}`}
+                          placeholderTextColor="#64748b"
+                          value={fieldValues[key] || ''}
+                          onChangeText={(text) =>
+                            setFieldValues((prev) => ({ ...prev, [key]: text }))
+                          }
+                        />
+                      </View>
+                    ))}
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* Sexual History */}
+            {sexualHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Sexual History</Text>
+                {sexualHistory.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
@@ -3110,26 +3891,130 @@ function AddRecordForPatientModal({
               </View>
             )}
 
-            {otherFieldKeys.length > 0 && (
-              <>
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionHeaderTitle}>Additional Details</Text>
-                </View>
-                {otherFieldKeys.map((key) => (
+            {/* Family & Social History */}
+            {familySocialHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Family & Social History</Text>
+                {familySocialHistory.map((key) => (
                   <View style={styles.formGroup} key={key}>
-                    <Text style={styles.formLabel}>{key.replace(/\b\w/g, (c) => c.toUpperCase())}</Text>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
                     <TextInput
                       style={styles.formInput}
                       placeholder={`Enter ${key.toLowerCase()}`}
                       placeholderTextColor="#64748b"
-                      value={fieldValues[key]}
+                      value={fieldValues[key] || ''}
                       onChangeText={(text) =>
                         setFieldValues((prev) => ({ ...prev, [key]: text }))
                       }
                     />
                   </View>
                 ))}
-              </>
+              </View>
+            )}
+
+            {/* Medical History */}
+            {medicalHistory.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Medical History</Text>
+                {medicalHistory.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Vital Signs */}
+            {vitalSigns.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Vital Signs</Text>
+                {vitalSigns.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Anthropometric */}
+            {anthropometric.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Anthropometric</Text>
+                {anthropometric.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Physical Examination */}
+            {physicalExam.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Physical Examination</Text>
+                {physicalExam.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Other */}
+            {other.length > 0 && (
+              <View style={styles.groupBox}>
+                <Text style={styles.groupBoxTitle}>Other Details</Text>
+                {other.map((key) => (
+                  <View style={styles.formGroup} key={key}>
+                    <Text style={styles.formLabel}>{getDisplayLabel(key)}</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder={`Enter ${key.toLowerCase()}`}
+                      placeholderTextColor="#64748b"
+                      value={fieldValues[key] || ''}
+                      onChangeText={(text) =>
+                        setFieldValues((prev) => ({ ...prev, [key]: text }))
+                      }
+                    />
+                  </View>
+                ))}
+              </View>
             )}
 
             {customFields.length > 0 && (
@@ -3237,7 +4122,17 @@ function SidebarModal({
             <Text style={styles.sidebarItemText}>Status Board</Text>
           </Pressable>
 
-          <Pressable style={styles.sidebarItem} onPress={() => { onClose(); onImport(); }}>
+          <Pressable style={styles.sidebarItem} onPress={() => {
+            onClose();
+            Alert.alert(
+              'Import Excel',
+              'This will import patient records from an Excel file. New records will be merged with your existing data.\n\nDo you want to continue?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Continue', onPress: onImport },
+              ]
+            );
+          }}>
             <View style={styles.sidebarItemIconContainer}>
               <Text style={styles.sidebarItemIconText}>📂</Text>
             </View>
@@ -3281,12 +4176,27 @@ function StaffsModal({
   visible: boolean;
   onClose: () => void;
 }) {
+  const [fullscreenImage, setFullscreenImage] = useState<any>(null);
+  const [fullscreenName, setFullscreenName] = useState<string>('');
+
   const staffList = [
-    { name: 'Sample', role: 'Breast Surgeon', dept: 'Breast Clinic' },
-    { name: 'Sample', role: 'Radiologist', dept: 'Breast Imaging' },
-    { name: 'Sample', role: 'Mammography Technologist', dept: 'Breast Imaging' },
-    { name: 'Sample', role: 'Breast Care Nurse', dept: 'Breast Clinic' },
+    { name: 'Jonathan Atendido', image: require('./assets/jonathan atendido.png'), role: 'BS in Biology Major in Medical Biology', location: 'Tetuan, Zamboanga City' },
+    { name: 'Vilmardiya Kawthar Aman', image: require('./assets/vilmardiya aman.png'), role: 'BS in Biology Major in Medical Biology', location: 'Lamitan City, Basilan' },
+    { name: 'Romar Cristian Ang', image: require('./assets/romar ang.png'), role: 'BS in Biology Major in Medical Biology', location: 'Tetuan, Zamboanga City' },
+    { name: 'Alleah Cobong', image: require('./assets/alleah cobong.png'), role: 'BS Biology Major in Animal Biology', location: 'Pugaan, Iligan City' },
+    { name: 'Nur-Jannah Godoy', image: require('./assets/nur-jannah godoy.png'), role: 'BS in Medical Laboratory Science', location: 'Mati City, Davao Oriental' },
+    { name: 'Aneeka Laja', image: require('./assets/aneeka laja.png'), role: 'BS in Medical Technology', location: 'Siasi, Sulu' },
+    { name: 'Sittie Hafizah Maguindra', image: require('./assets/sitti hafizah maguindra.png'), role: 'BS in Psychology', location: 'Pagadian City, Zamboanga del Sur' },
+    { name: 'Shaira Mukaram', image: require('./assets/shaira mukaram.png'), role: 'BS in Medical Technology', location: 'Rio Hondo, Zamboanga City' },
+    { name: 'Nurun Nahla Reyes', image: require('./assets/nurun nahla reyes.png'), role: 'BS in Medical Technology', location: 'Jolo, Sulu' },
+    { name: 'Rasdin Sariul', image: require('./assets/rasdin sariul.png'), role: 'BS in Nursing', location: 'Cotabato City' },
+    { name: 'Marwin Tubat', image: require('./assets/marwin tubat.png'), role: 'BS in Medical Technology', location: 'Sultan Naga Dimaporo, Lanao del Norte' },
   ];
+
+  const handleImagePress = (staff: typeof staffList[0]) => {
+    setFullscreenImage(staff.image);
+    setFullscreenName(staff.name);
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -3299,21 +4209,46 @@ function StaffsModal({
         </View>
 
         <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
-          <Text style={styles.staffsSubtitle}>Medical Team</Text>
+          <Text style={styles.staffsSubtitle}>Team Silayan</Text>
           {staffList.map((staff, idx) => (
             <View key={idx} style={styles.staffCard}>
-              <View style={styles.staffAvatar}>
-                <Text style={styles.staffAvatarText}>{staff.name.charAt(0)}</Text>
-              </View>
+              <Pressable onPress={() => handleImagePress(staff)}>
+                <Image source={staff.image} style={styles.staffAvatarImage} resizeMode="cover" />
+              </Pressable>
               <View style={styles.staffInfo}>
                 <Text style={styles.staffName}>{staff.name}</Text>
                 <Text style={styles.staffRole}>{staff.role}</Text>
-                <Text style={styles.staffDept}>{staff.dept}</Text>
+                <Text style={styles.staffDept}>{staff.location}</Text>
               </View>
             </View>
           ))}
         </ScrollView>
       </SafeAreaView>
+
+      {/* Fullscreen Image Modal */}
+      <Modal
+        visible={fullscreenImage !== null}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setFullscreenImage(null)}
+      >
+        <View style={styles.staffFullscreenOverlay}>
+          <Pressable
+            style={styles.staffFullscreenCloseBtn}
+            onPress={() => setFullscreenImage(null)}
+          >
+            <Text style={styles.staffFullscreenCloseText}>✕</Text>
+          </Pressable>
+          <Image
+            source={fullscreenImage}
+            style={styles.staffFullscreenImage}
+            resizeMode="contain"
+          />
+          {fullscreenName ? (
+            <Text style={styles.staffFullscreenName}>{fullscreenName}</Text>
+          ) : null}
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -3435,7 +4370,7 @@ function StatusBoardModal({
                         </View>
                       ) : (
                         <View style={styles.statusBoardBadgeWarn}>
-                          <Text style={styles.statusBoardBadgeTextWarn}>⚠ {latestRecord.breastValue || 'Warning'}</Text>
+                          <Text style={styles.statusBoardBadgeTextWarn}>⚠ {latestRecord.breastValue || 'Suspicious'}</Text>
                         </View>
                       )}
                     </View>
@@ -3492,40 +4427,25 @@ function ImportExcelModal({
   const downloadTemplate = async () => {
     try {
       const headers = [
-        'name',
-        'Screening Date',
-        'Referral Date',
-        'Breast',
-        'Admit Number',
-        'ID no. (Hosp)',
-        'age',
-        'address',
-        'civil status',
-        'BP',
-        'Temp',
-        'PR',
-        'RR',
-        'family hx of cancer',
-        'Smoking hx',
-        'Allergies',
+        'Screening Date', 'ID No. ', 'Name', 'Age', 'Address', 'Contact No. ',
+        'Civil Status ', 'No. of Children', 'Menarche', 'LMP', 'AOG',
+        'Menstrual Bleeding Pattern ', 'No. of pads/day', 'Pregnancy History ',
+        'Age at first full term pregnancy ', 'Oral Contraceptives Use',
+        'Duration of usage of oral contraceptives',
+        'History of previous cervical cancer screening ',
+        'History of abnormal vaginal discharge', 'History of abnormal vaginal bleeding',
+        'Age of first intercourse', 'No. of sexual partner', 'Spouse/Partner/s',
+        'Family History of Cancer', 'Smoking ', 'Current medication', 'Allergies',
+        'Abdominal surgery', 'BP', 'Temp', 'HR', 'RR', 'Height (cm)', 'Weight (kg)', 'BMI',
+        'Skin', 'HEENT', 'Chest and Lungs', 'Heart', 'Abdomen', 'Right Breast', 'Left Breast',
       ];
       const sampleRow = [
-        'Juan Dela Cruz',
-        '06/28/2026',
-        '07/01/2026',
-        'Warning',
-        '123456789',
-        'HOSP-001',
-        '45',
-        'Manila',
-        'Married',
-        '120/80',
-        '36.5',
-        '72',
-        '18',
-        'No',
-        'No',
-        'None',
+        '06/28/2026', '001', 'Juan Dela Cruz', '45', 'Manila', '09123456789',
+        'Married', '3', '13', '06/01/2026', '', 'Regular', '3',
+        'G3T3P0A0L3', '22', 'Yes', '5 years', 'No', 'No', 'No',
+        '20', '1', 'Circumcised', 'No', 'No', 'None', 'None', 'None',
+        '120/80', '36.5', '80', '18', '160', '55', '21.5',
+        'UR', 'UR', 'UR', 'UR', 'UR', 'UR', 'UR',
       ];
       const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
       const wb = XLSX.utils.book_new();
@@ -3560,10 +4480,10 @@ function ImportExcelModal({
         <View style={{ flex: 1, padding: 24, gap: 16 }}>
           <Text style={{ color: '#4b5563', fontSize: 15, lineHeight: 22 }}>
             Select an Excel file (.xlsx) to import patient records. The file should have columns for{' '}
-            <Text style={{ fontWeight: '700' }}>name</Text>,{' '}
+            <Text style={{ fontWeight: '700' }}>Name</Text>,{' '}
             <Text style={{ fontWeight: '700' }}>Screening Date</Text>,{' '}
-            <Text style={{ fontWeight: '700' }}>Referral Date</Text>, and{' '}
-            <Text style={{ fontWeight: '700' }}>Breast</Text>.
+            <Text style={{ fontWeight: '700' }}>Right Breast</Text>, and{' '}
+            <Text style={{ fontWeight: '700' }}>Left Breast</Text>.
           </Text>
           <Text style={{ color: '#6b7280', fontSize: 13, lineHeight: 20 }}>
             New records will be merged with your existing data.
@@ -3595,7 +4515,7 @@ function ImportExcelModal({
           <View style={{ marginTop: 16, padding: 16, backgroundColor: '#f9fafb', borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb' }}>
             <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 8 }}>Template Columns:</Text>
             <Text style={{ color: '#6b7280', fontSize: 12, lineHeight: 20 }}>
-              name, Screening Date, Referral Date, Breast, Admit Number, ID no. (Hosp), age, address, civil status, BP, Temp, PR, RR, family hx of cancer, Smoking hx, Allergies
+              Screening Date, ID No., Name, Age, Address, Contact No., Civil Status, No. of Children, Menarche, LMP, AOG, Menstrual Bleeding Pattern, No. of pads/day, Pregnancy History, Age at first full term pregnancy, Oral Contraceptives Use, Duration of usage of oral contraceptives, History of previous cervical cancer screening, History of abnormal vaginal discharge, History of abnormal vaginal bleeding, Age of first intercourse, No. of sexual partner, Spouse/Partner/s, Family History of Cancer, Smoking, Current medication, Allergies, Abdominal surgery, BP, Temp, HR, RR, Height (cm), Weight (kg), BMI, Skin, HEENT, Chest and Lungs, Heart, Abdomen, Right Breast, Left Breast
             </Text>
           </View>
         </View>
@@ -3994,7 +4914,7 @@ const styles = StyleSheet.create({
     color: '#db4278',
     fontSize: 16,
     fontWeight: '700',
-    marginBottom: 4,
+    marginBottom: 12,
   },
   categoryLabel: {
     color: '#6b7280',
@@ -4002,11 +4922,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginTop: 4,
-    marginBottom: 2,
+    marginTop: 16,
+    marginBottom: 4,
     borderBottomWidth: 1,
     borderBottomColor: '#f0e2e9',
+    paddingBottom: 6,
+  },
+  categorySubLabel: {
+    color: '#b51f55',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: 12,
+    marginBottom: 4,
     paddingBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fce7f0',
   },
   detailRow: {
     flexDirection: 'row',
@@ -4199,6 +5131,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+  detailValueUr: {
+    color: '#10b981', // Green for UR
+    fontWeight: '700',
+  },
+  detailValueWarning: {
+    color: '#d97706', // Amber/warning for anything else
+    fontWeight: '700',
+  },
+  viewRecordFieldValueUr: {
+    color: '#10b981', // Green for UR
+    fontWeight: '700',
+  },
+  viewRecordFieldValueWarning: {
+    color: '#d97706', // Amber/warning for anything else
+    fontWeight: '700',
+  },
+  detailValueSuspicious: {
+    color: '#d97706', // Amber/warning color for Suspicious
+    fontWeight: '700',
+  },  
+  viewRecordFieldValueSuspicious: {
+    color: '#d97706', // Amber/warning color for Suspicious
+    fontWeight: '700',
   },
   quickStatusBtnActiveUr: {
     backgroundColor: '#d1fae5',
@@ -4502,6 +5458,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 4,
   },
+  viewRecordSubSectionTitle: {
+    color: '#b51f55',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 4,
+    marginBottom: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fce7f0',
+    paddingBottom: 2,
+  },
   viewRecordItem: {
     color: '#374151',
     fontSize: 14,
@@ -4673,6 +5639,48 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  staffAvatarImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#f0e2e9',
+  },
+  staffFullscreenOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  staffFullscreenImage: {
+    width: '100%',
+    height: '70%',
+    borderRadius: 16,
+  },
+  staffFullscreenCloseBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  staffFullscreenCloseText: {
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: '700',
+  },
+  staffFullscreenName: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 20,
+    textAlign: 'center',
   },
   staffsIconContainer: {
     width: 28,
@@ -5145,3 +6153,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+export default App;
