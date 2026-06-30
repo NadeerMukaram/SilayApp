@@ -531,10 +531,26 @@ function App() {
         patient.isUr = isPatientUr(patient.rightBreastValue, patient.leftBreastValue);
       });
       if (loadedFile) {
-        // Merge with existing data
+        // Merge with existing data — skip records that already exist
+        // (same patient name + same screening date + same referral date)
+        const normalize = (s: string) => (s ?? '').toLowerCase().trim();
+        const existingKeys = new Set(
+          loadedFile.result.patients.map(
+            (p) => `${normalize(p.patientName)}|${normalize(p.screeningDate)}|${normalize(p.date)}`
+          )
+        );
+
         const existingRows = loadedFile.result.patients.map(p => p.rowIndex);
         const maxRow = Math.max(...existingRows, 0);
-        const newPatients = checkResult.patients.map((p, i) => ({ ...p, rowIndex: maxRow + i + 1 }));
+
+        const dedupedIncoming = checkResult.patients.filter((p) => {
+          const key = `${normalize(p.patientName)}|${normalize(p.screeningDate)}|${normalize(p.date)}`;
+          return !existingKeys.has(key);
+        });
+
+        const newPatients = dedupedIncoming.map((p, i) => ({ ...p, rowIndex: maxRow + i + 1 }));
+        const skippedCount = checkResult.patients.length - dedupedIncoming.length;
+
         setLoadedFile({
           ...loadedFile,
           result: {
@@ -542,7 +558,9 @@ function App() {
             patients: [...loadedFile.result.patients, ...newPatients],
           },
         });
-        Alert.alert('Imported', `Added ${newPatients.length} records from ${fileName}.`);
+
+        const skippedMsg = skippedCount > 0 ? ` (${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped)` : '';
+        Alert.alert('Imported', `Added ${newPatients.length} records from ${fileName}.${skippedMsg}`);
       } else {
         setLoadedFile({ name: fileName, result: checkResult });
         Alert.alert('Imported', `Loaded ${checkResult.patients.length} records from ${fileName}.`);
